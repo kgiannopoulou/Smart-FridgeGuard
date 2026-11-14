@@ -465,7 +465,7 @@ rules:
   DR-1_brute_force:        { enabled: true, failures: 5, window_s: 300, severity: HIGH }
   DR-2_off_hours_login:    { enabled: true, severity: MEDIUM }
   DR-3_unknown_ip:         { enabled: true, severity: MEDIUM }
-  DR-4_unauthorised_change:{ enabled: true, allowed_roles: [technician, admin], severity: HIGH }
+  DR-4_unauthorised_change:{ enabled: true, permissions: users.yaml, missing_auth: investigate, severity: HIGH }
   DR-5_dangerous_setpoint: { enabled: true, max_fridge_c: 8.0, max_freezer_c: -15.0, severity: HIGH }
   DR-6_out_of_range:       { enabled: true, duration_s: 900, severity: HIGH }
   DR-7_sensor_tamper:      { enabled: true, max_jump_c: 10.0, min_c: -40.0, max_c: 50.0, severity: HIGH }

@@ -88,7 +88,7 @@ The system shall apply detection rules to incoming events, including at least:
 | DR-1 | Brute-force login | ≥ 5 failed logins for one device within 5 min | High |
 | DR-2 | Login outside normal hours | Successful login between 00:00 and 05:00 | Medium |
 | DR-3 | Login from unknown source IP | IP not in the device's allow-list | Medium |
-| DR-4 | Unauthorised configuration change | Change by an actor without the admin role | High |
+| DR-4 | Unauthorised configuration change | Configuration or setpoint change where the actor's role lacks the required permission for that specific action (see DR-4 logic below) | High |
 | DR-5 | Dangerous setpoint change | Fridge setpoint set above 8 °C | High |
 | DR-6 | Temperature out of safe range | > 8 °C for longer than 15 min | High |
 | DR-7 | Sensor tampering / spoofing | Jump > 10 °C between consecutive readings, or physically impossible value | High |
@@ -98,6 +98,24 @@ The system shall apply detection rules to incoming events, including at least:
 | DR-11 | Detection configuration changed | Any change to detection thresholds, enabled rules, allow-lists, roles, maintenance window or event retention (hash of the config differs from the last recorded version) | High |
 
 **Acceptance:** each rule fires on its attack scenario and does not fire on the normal baseline.
+
+**DR-4 logic.** A configuration or setpoint change is unauthorised when the actor's role does
+not have the required permission for that specific action. Roles and permissions are defined
+in `config/users.yaml`, and every `config.change` event records the `permission` it needed
+and whether the role had it (`authorized`).
+
+| `authorized` in the event | DR-4 outcome |
+|---------------------------|--------------|
+| `true` | No unauthorised-change alert; the event stays in the audit log. |
+| `false` | Alert, whether the device denied the change or applied it. |
+| Missing or invalid (not a boolean, or the role/permission cannot be resolved) | Flagged for investigation as `suspicious`; never treated as authorised. |
+
+Examples: a maintenance technician changing a setpoint (has `change_setpoint`) does **not**
+trigger DR-4. The same technician attempting a firmware update (needs `update_firmware`), or
+the store manager attempting any setpoint change, **does**. Changes made with a permitted
+role but outside the maintenance window are not DR-4's job. Night-time cases are caught by
+DR-2 (login 00:00–05:00) and DR-9 (login followed by a change); daytime changes outside the
+window are recorded (`within_maintenance_window: false`) but no rule alerts on them yet.
 
 DR-10 and DR-11 were added after threat modelling (threat-model.md §11), because no
 existing rule covered these two threats:
