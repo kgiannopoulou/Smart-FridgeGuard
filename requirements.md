@@ -115,7 +115,8 @@ trigger DR-4. The same technician attempting a firmware update (needs `update_fi
 the store manager attempting any setpoint change, **does**. Changes made with a permitted
 role but outside the maintenance window are not DR-4's job. Night-time cases are caught by
 DR-2 (login 00:00–05:00) and DR-9 (login followed by a change); daytime changes outside the
-window are recorded (`within_maintenance_window: false`) but no rule alerts on them yet.
+window are recorded (`within_maintenance_window: false`) and marked `suspicious` when stored
+(Step 7, docs/event-database.md §4), but no rule raises an *alert* for them yet.
 
 DR-10 and DR-11 were added after threat modelling (threat-model.md §11), because no
 existing rule covered these two threats:

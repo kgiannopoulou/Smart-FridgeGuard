@@ -197,6 +197,10 @@ class ActivitySimulator:
             target = spec.setpoint_c
         return round(target, 1)
 
+    def _other_defrost_interval(self, fridge) -> int:
+        """A defrost interval different from the current one (no no-op changes)."""
+        return self.rng.choice([h for h in (6, 8, 12) if h != fridge.defrost_interval_h])
+
     # ---- routines --------------------------------------------------------------------
     def _manager_check(self) -> list[tuple[float, Callable]]:
         v = self._visit("store_manager", BASELINE)
@@ -219,7 +223,7 @@ class ActivitySimulator:
             steps.append(
                 (
                     offset,
-                    self._change(v, "defrost_interval_h", lambda f: self.rng.choice([6, 8, 12])),
+                    self._change(v, "defrost_interval_h", self._other_defrost_interval),
                 )
             )
         steps.append((offset + self.rng.uniform(600, 1500), self._logout(v)))
@@ -239,7 +243,10 @@ class ActivitySimulator:
             )
         else:
             steps.append(
-                (self.rng.uniform(60, 300), self._change(v, "defrost_interval_h", lambda f: 8))
+                (
+                    self.rng.uniform(60, 300),
+                    self._change(v, "defrost_interval_h", self._other_defrost_interval),
+                )
             )
         steps.append((self.rng.uniform(600, 1200), self._logout(v)))
         return steps

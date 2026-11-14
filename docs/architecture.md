@@ -184,20 +184,22 @@ a medical fridge (FRIDGE-003) or when the hit is part of a correlation.
 | | |
 |---|---|
 | **Responsibility** | Persistent storage for all events, alerts, incidents and audit history. |
-| **Implementation** | `fridgeguard/storage/` with `schema.sql`, `repository.py`. File: `data/fridgeguard.db`. |
+| **Implementation** | `fridgeguard/storage/` with `schema.sql`, `normalize.py`, `store.py` (`EventStore`). File: `data/fridgeguard.db`. Details: [event-database.md](event-database.md). |
 | **Why SQLite** | Zero setup, single file, transactional, fast enough for thousands of events per second at this scale, readable by Streamlit and pandas. |
 | **Concurrency** | WAL mode so the pipeline writes while the dashboard reads. One writer process; the dashboard opens the database read-only (`mode=ro`). |
-| **Integrity** | Triggers reject `UPDATE`/`DELETE` on `events`, `alert_events`, `alert_history` and `config_history`. |
+| **Integrity** | Triggers reject `UPDATE`/`DELETE` on `telemetry`, `security_events`, `event_status_history` and `rejected_events` (and later `alert_events`, `alert_history`, `config_history`). |
 | **Requirements** | FR-7, NFR-2, NFR-5 |
 
-Schema overview (full DDL in section 6).
+Schema overview. Telemetry and security audit events are stored in separate tables
+(implemented in Step 7); alerts and incidents follow in later steps.
 
 ```mermaid
 erDiagram
-    devices ||--o{ events : produces
-    events ||--o| event_classification : "classified as"
+    devices ||--o{ telemetry : measures
+    devices ||--o{ security_events : "audit trail"
+    security_events ||--o{ event_status_history : "status over time"
     alerts ||--o{ alert_events : "evidence"
-    events ||--o{ alert_events : "linked to"
+    security_events ||--o{ alert_events : "linked to"
     alerts ||--o{ alert_history : "status changes"
     incidents ||--o{ alerts : groups
 ```
@@ -343,6 +345,14 @@ Payloads:
 Passwords are never part of any event. Tokens, if present, are masked to the first four characters.
 
 ## 6. Database schema
+
+> **Implemented in Step 7.** The event tables are in
+> [`fridgeguard/storage/schema.sql`](../fridgeguard/storage/schema.sql) and documented in
+> [event-database.md](event-database.md). They replace the single `events` table and
+> `event_classification` table sketched below. Telemetry and security audit events are now
+> separate tables (`telemetry`, `security_events`), and status is kept as an append-only
+> history (`event_status_history`). The `alerts`, `incidents` and `config_history` tables
+> below are still the plan for the detection and investigation steps.
 
 ```sql
 PRAGMA journal_mode = WAL;

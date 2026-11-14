@@ -27,6 +27,9 @@ fridgeguard = "fridgeguard.__main__:main"
 [tool.setuptools.packages.find]
 include = ["fridgeguard*"]
 
+[tool.setuptools.package-data]
+"fridgeguard.storage" = ["schema.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

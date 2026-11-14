@@ -23,8 +23,8 @@ python -m fridgeguard simulate --duration 3d --show activity
 python -m fridgeguard simulate --duration 12h --no-activity
 ```
 
-Every event is printed to the console and appended to `data/events.jsonl`
-(git-ignored). `--out other.jsonl` changes the file and `--out -` disables it.
+Every event is printed to the console, appended to `data/events.jsonl` and stored in the
+event database `data/fridgeguard.db` (both git-ignored; see [event-database.md](event-database.md)). `--out other.jsonl` changes the file and `--out -` disables it.
 
 | Option | Default | Meaning |
 |--------|---------|---------|
