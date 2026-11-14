@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+
+# Secrets (NFR-6) - commit .env.example only
+.env
+
+# Generated data
+data/*
+!data/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+# Editors / OS
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Streamlit dashboard",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "streamlit",
+      "args": ["run", "dashboard/app.py"]
+    },
+    {
+      "name": "fridgeguard check-env",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "fridgeguard",
+      "args": ["check-env"]
+    }
+  ]
+}
