@@ -85,7 +85,7 @@ flowchart LR
 | | |
 |---|---|
 | **Responsibility** | Model the physical state of each refrigerator. |
-| **Implementation** | `fridgeguard/simulator/fridge.py`, one `Fridge` object per device. |
+| **Implementation** | `fridgeguard/simulator/fridge.py` (one `Fridge` per device), `fleet.py`. Details: [simulation.md](simulation.md). |
 | **State per device** | `device_id`, name, location, type (fridge/freezer), setpoint, current temperature, door open/closed, compressor on/off, firmware version, alarm thresholds, allowed IP list, online flag. |
 | **Behaviour** | Each tick (default 10 s simulated), temperature moves toward the setpoint when the compressor runs and drifts toward room temperature when the door is open or cooling fails. Small Gaussian noise makes readings realistic. |
 | **Requirements** | FR-1, FR-2 |
@@ -105,7 +105,7 @@ The fleet size is configurable; more devices are added by extending `devices.yam
 | | |
 |---|---|
 | **Responsibility** | Produce events from device state and simulated user activity. |
-| **Implementation** | `fridgeguard/generator/` with `telemetry.py`, `logins.py`, `config_changes.py`, `scenarios.py`. |
+| **Implementation** | `fridgeguard/generator/auth.py` (users, passwords, RBAC, audit events), `activity.py` (daily routines, anomalies); runner in `fridgeguard/simulation.py`. Details: [simulation.md](simulation.md). |
 | **Event types** | `telemetry.temperature`, `auth.login_success`, `auth.login_failure`, `auth.logout`, `config.change`, `device.heartbeat` |
 | **Normal activity** | Staff log in during working hours from known IPs; technicians occasionally adjust a setpoint within the safe range. |
 | **Attack scenarios** | Loaded from `scenarios/*.yaml`. Each step has a time offset, target device and action (see 3.2.1). |
@@ -333,10 +333,10 @@ Payloads:
 
 | Event type | Payload fields |
 |------------|----------------|
-| `telemetry.temperature` | `temperature_c`, `setpoint_c`, `door_open`, `compressor_on` |
-| `auth.login_success` / `auth.login_failure` | `method` (password, pin, token), `reason` (failure only), `role` |
+| `telemetry.temperature` | `temperature_c`, `setpoint_c`, `expected_min_c`, `expected_max_c`, `status`, `door_open`, `compressor_on` |
+| `auth.login_success` / `auth.login_failure` | `method` (password, pin, token), `reason` (failure only), `role`, `session_id` (success only), `within_maintenance_window` |
 | `auth.logout` | `session_s` |
-| `config.change` | `parameter`, `old_value`, `new_value`, `change_source` |
+| `config.change` | `parameter`, `old_value`, `new_value`, `change_source`, `result` (applied / denied / rejected), `role`, `permission`, `authorized`, `within_maintenance_window`, `session_id` |
 | `device.heartbeat` | `firmware`, `uptime_s` |
 
 Passwords are never part of any event. Tokens, if present, are masked to the first four characters.
@@ -493,7 +493,7 @@ Smart-FridgeGuard/
 ├── scenarios/
 │   └── *.yaml
 ├── fridgeguard/
-│   ├── __main__.py              # CLI: run, seed, report, verify
+│   ├── __main__.py              # CLI: check-env, simulate (later: run, report, verify)
 │   ├── models.py                # Event, Alert, Severity dataclasses
 │   ├── simulator/
 │   ├── generator/

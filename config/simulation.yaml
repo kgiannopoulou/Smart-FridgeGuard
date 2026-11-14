@@ -1,0 +1,8 @@
+# Simulation settings. Command-line options override these values.
+seed: 42
+start: "2026-11-16T04:00:00Z"   # Monday 06:00 Athens time
+interval_s: 60                   # one temperature reading per device per interval
+password_hash_iterations: 100000 # PBKDF2-HMAC-SHA256
+activity:
+  enabled: true
+  anomalies_per_day: 2           # average number of suspicious activities injected per day

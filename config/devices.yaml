@@ -1,0 +1,64 @@
+# Fleet definition (FR-1). Add devices here to grow the fleet.
+#
+# safe_min_c / safe_max_c  expected operating range (product safety limits)
+# setpoint_c               configured target temperature
+# hysteresis_c             compressor switches on above setpoint + h/2, off below setpoint - h/2
+# ambient_c                room temperature around the cabinet
+# leak_per_min             fraction of the (ambient - inside) gap gained per minute (insulation)
+# cooling_c_per_min        temperature drop per minute while the compressor runs
+# door_leak_factor         leak multiplier while the door is open
+# sensor_noise_c           standard deviation of sensor noise
+# door_opens_per_hour      average door openings per hour during opening hours
+
+site:
+  name: Store A (Athens)
+  timezone: Europe/Athens
+  opening_hours: { start: "07:00", end: "22:00" }
+
+defaults:
+  ambient_c: 22.0
+  sensor_noise_c: 0.1
+  door_leak_factor: 8.0
+  firmware_version: "2.4.1"
+  alarm_delay_min: 15
+
+devices:
+  - device_id: FRIDGE-001
+    name: Dairy display fridge
+    location: Store A, dairy aisle
+    device_type: fridge
+    setpoint_c: 4.0
+    safe_min_c: 2.0
+    safe_max_c: 8.0
+    hysteresis_c: 1.0
+    leak_per_min: 0.010
+    cooling_c_per_min: 0.50
+    door_opens_per_hour: 6
+    allowed_ips: ["10.10.1.20", "10.10.1.21", "10.10.1.30"]
+
+  - device_id: FRIDGE-002
+    name: Back-room freezer
+    location: Store A, back room
+    device_type: freezer
+    setpoint_c: -18.0
+    safe_min_c: -22.0
+    safe_max_c: -15.0
+    hysteresis_c: 2.0
+    leak_per_min: 0.005
+    cooling_c_per_min: 0.60
+    door_opens_per_hour: 2
+    allowed_ips: ["10.10.1.20", "10.10.1.21", "10.10.1.30"]
+
+  - device_id: FRIDGE-003
+    name: Pharmacy vaccine fridge
+    location: Store A, pharmacy counter
+    device_type: medical_fridge
+    setpoint_c: 5.0
+    safe_min_c: 2.0
+    safe_max_c: 8.0
+    hysteresis_c: 0.6
+    leak_per_min: 0.006
+    cooling_c_per_min: 0.40
+    door_opens_per_hour: 1
+    sensor_noise_c: 0.05
+    allowed_ips: ["10.10.1.20", "10.10.1.21", "10.10.1.30"]

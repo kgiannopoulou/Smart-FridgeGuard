@@ -22,6 +22,8 @@ SOC dashboard supports alert triage and incident investigation.
 | | 2. Research the threat and build a threat model | [threat-model.md](threat-model.md) | Done |
 | | 3. Design the system architecture | [docs/architecture.md](docs/architecture.md), [diagram](docs/architecture.svg) | Done |
 | | 4. Prepare the development environment | [docs/development-setup.md](docs/development-setup.md), venv, project folders, CI | Done |
+| | 5. Build the refrigerator simulation engine | `fridgeguard/simulator/`, [docs/simulation.md](docs/simulation.md) | Done |
+| | 6. Build the user and activity simulator | `fridgeguard/generator/`, [docs/simulation.md](docs/simulation.md) | Done |
 
 ## Quick start
 
@@ -36,9 +38,23 @@ streamlit run dashboard/app.py
 
 Full instructions: [docs/development-setup.md](docs/development-setup.md).
 
+## Run the simulation
+
+```powershell
+python -m fridgeguard simulate --realtime --speed 60        # live, until Ctrl+C
+python -m fridgeguard simulate --duration 3d --show activity # 3 days of data, fast
+```
+
+Three refrigerators with different operating ranges follow a thermal model (thermostat,
+door openings, sensor noise). Fictional users (`store_manager`, `maintenance_tech`,
+`system_admin`, `unknown_user`) log in, change settings and occasionally behave
+suspiciously. Role-based access control and a maintenance window decide what is allowed.
+All events go to the console and `data/events.jsonl`. See [docs/simulation.md](docs/simulation.md).
+
 ## Documentation
 
 - [Requirements](requirements.md): functional and non-functional requirements, detection rules, traceability
 - [Threat model](threat-model.md): assets, entry points, threat actors, STRIDE analysis, MITRE ATT&CK for ICS mapping, risk rating, defensive controls
 - [Architecture](docs/architecture.md): components, data flow, event schema, SQLite schema, detection engine design, configuration, tech stack, security design
 - [Development setup](docs/development-setup.md): tools, virtual environment, VS Code, project folders, everyday commands
+- [Simulation](docs/simulation.md): refrigerator thermal model, reading format, users and roles, authentication, authorization, activity events

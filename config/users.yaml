@@ -1,0 +1,49 @@
+# Fictional supermarket users and authorization roles (Step 6).
+#
+# No passwords are stored here. The simulator creates a random password for each
+# registered user at start-up, keeps only its PBKDF2 hash, and the simulated user
+# "remembers" the plain value in memory. Nothing secret is written to disk or logs.
+
+maintenance_window:
+  # Planned maintenance is allowed only in this local-time window (site timezone).
+  days: [mon, tue, wed, thu, fri]
+  start: "06:00"
+  end: "09:00"
+
+roles:
+  manager:
+    description: Store manager; monitors fridges, cannot change device settings.
+    permissions: [view_status, acknowledge_alarm]
+  technician:
+    description: Maintenance technician; adjusts cooling settings during maintenance.
+    permissions: [view_status, acknowledge_alarm, change_setpoint, change_alarm_thresholds, change_defrost]
+  admin:
+    description: System administrator; full device and platform administration.
+    permissions: [view_status, acknowledge_alarm, change_setpoint, change_alarm_thresholds,
+                  change_defrost, update_firmware, manage_users]
+
+users:
+  - username: store_manager
+    full_name: Store Manager (fictional)
+    role: manager
+    login_method: password
+    known_ips: ["10.10.1.20"]
+
+  - username: maintenance_tech
+    full_name: Maintenance Technician (fictional)
+    role: technician
+    login_method: password
+    known_ips: ["10.10.1.30"]
+
+  - username: system_admin
+    full_name: System Administrator (fictional)
+    role: admin
+    login_method: password
+    known_ips: ["10.10.1.21"]
+
+  # Not a registered account: an outsider who tries to log in.
+  - username: unknown_user
+    full_name: Unknown external actor
+    role: none
+    registered: false
+    known_ips: ["203.0.113.50", "198.51.100.23", "192.0.2.77"]
