@@ -4,7 +4,7 @@
 **Step:** 2 – Research the threat and build a threat model
 **Status:** Draft v1.0 (2026-11-14)
 **Methodology:** STRIDE per element, attacker behaviour mapped to MITRE ATT&CK for ICS
-**Related:** [requirements.md](requirements.md) (FR/NFR and detection rules DR-1…DR-9)
+**Related:** [requirements.md](requirements.md) (FR/NFR and detection rules DR-1…DR-11)
 
 ---
 
@@ -291,7 +291,7 @@ simulation; Design = documented recommendation for a real deployment).
 | C-7 | Signed firmware and controlled update process | Prevent | T-4 | Design |
 | C-8 | Network segmentation: devices, edge and monitoring in separate zones | Prevent | T-1, T-4, T-5 | Design |
 | C-9 | Physical protection: tamper-evident sensor housing, locked service ports | Prevent | T-6, T-4 | Design |
-| C-10 | Detection rules DR-1…DR-9 with configurable thresholds | Detect | All | Lab |
+| C-10 | Detection rules DR-1…DR-11 with configurable thresholds | Detect | All | Lab |
 | C-11 | Audit log of every login and configuration change (who, what, old/new, from where) | Detect | T-2, T-4, T-7 | Lab |
 | C-12 | Device-time vs. server-time comparison to spot replay or clock tampering | Detect | T-6, T-7 | Lab |
 | C-13 | Heartbeat / silence detection per device and per site | Detect | T-5 | Lab |
@@ -310,18 +310,18 @@ simulation; Design = documented recommendation for a real deployment).
 | T-1 Unauthorized remote access | DR-2 unusual hours, DR-3 unknown IP, DR-9 correlated attack | C-1, C-2, C-6, C-8, C-10 | FR-3, FR-5, FR-6 |
 | T-2 Stolen employee credentials | DR-2, DR-3, DR-4 unauthorised change, DR-5 dangerous setpoint, DR-9 | C-3, C-5, C-11, C-19 | FR-3, FR-4, FR-5 |
 | T-3 Brute-force attempts | DR-1 brute force | C-3, C-4 | FR-3, FR-5, NFR-4 |
-| T-4 Compromised controller | DR-4, DR-5, DR-6 out of range, DR-7 tampering | C-5, C-7, C-14, C-17, C-19 | FR-4, FR-5 |
+| T-4 Compromised controller | DR-4, DR-5, DR-6 out of range, DR-7 tampering, DR-10 alarm widened | C-5, C-7, C-14, C-17, C-19 | FR-4, FR-5 |
 | T-5 Network interruption | DR-8 device silence | C-13, C-16 | FR-7, NFR-2 |
 | T-6 Sensor manipulation | DR-6, DR-7 | C-2, C-9, C-12, C-14 | FR-2, FR-5, NFR-1 |
-| T-7 Log and evidence tampering | Threshold changes logged (NFR-4), append-only store | C-11, C-15 | NFR-2, NFR-5, NFR-6 |
+| T-7 Log and evidence tampering | DR-11 detection config changed, append-only store | C-11, C-15 | NFR-2, NFR-5, NFR-6 |
 
 ### Gaps found during threat modelling
 
-Two threats need detections that requirements.md does not yet list. They are proposed for
-the detection engine:
+Two threats needed detections that requirements.md did not list at first. Both were
+checked for overlap with DR-1…DR-9 and **added to requirements.md (FR-5)** on 2026-11-14:
 
-| Proposed rule | Detects | Threat |
-|---------------|---------|--------|
+| Added rule | Detects | Threat |
+|------------|---------|--------|
 | DR-10 Alarm disabled or threshold widened | Any change that disables an alarm or widens its range beyond policy | T-4 (T0838, T0878) |
 | DR-11 Detection/rule configuration changed | Changes to detection thresholds, rule chains or event retention | T-7 |
 

@@ -83,19 +83,38 @@ before/after values.
 ### FR-5 Identify suspicious activity
 The system shall apply detection rules to incoming events, including at least:
 
-| Rule ID | Detection | Example default threshold |
-|---------|-----------|---------------------------|
-| DR-1 | Brute-force login | ≥ 5 failed logins for one device within 5 min |
-| DR-2 | Login outside normal hours | Successful login between 00:00 and 05:00 |
-| DR-3 | Login from unknown source IP | IP not in the device's allow-list |
-| DR-4 | Unauthorised configuration change | Change by an actor without the admin role |
-| DR-5 | Dangerous setpoint change | Fridge setpoint set above 8 °C |
-| DR-6 | Temperature out of safe range | > 8 °C for longer than 15 min |
-| DR-7 | Sensor tampering / spoofing | Jump > 10 °C between consecutive readings, or physically impossible value |
-| DR-8 | Device silence | No telemetry for > 3 × reporting interval |
-| DR-9 | Correlated attack | Suspicious login followed by a config change on the same device within 10 min |
+| Rule ID | Detection | Example default threshold | Default severity |
+|---------|-----------|---------------------------|------------------|
+| DR-1 | Brute-force login | ≥ 5 failed logins for one device within 5 min | High |
+| DR-2 | Login outside normal hours | Successful login between 00:00 and 05:00 | Medium |
+| DR-3 | Login from unknown source IP | IP not in the device's allow-list | Medium |
+| DR-4 | Unauthorised configuration change | Change by an actor without the admin role | High |
+| DR-5 | Dangerous setpoint change | Fridge setpoint set above 8 °C | High |
+| DR-6 | Temperature out of safe range | > 8 °C for longer than 15 min | High |
+| DR-7 | Sensor tampering / spoofing | Jump > 10 °C between consecutive readings, or physically impossible value | High |
+| DR-8 | Device silence | No telemetry for > 3 × reporting interval | Medium |
+| DR-9 | Correlated attack | Suspicious login followed by a config change on the same device within 10 min | Critical |
+| DR-10 | Alarm disabled or alarm range widened | Applied change that sets `alarm_high_c` above or `alarm_low_c` below the device's expected operating range, or `alarm_low_c` ≥ `alarm_high_c` (alarm can never fire) | High |
+| DR-11 | Detection configuration changed | Any change to detection thresholds, enabled rules, allow-lists, roles, maintenance window or event retention (hash of the config differs from the last recorded version) | High |
 
 **Acceptance:** each rule fires on its attack scenario and does not fire on the normal baseline.
+
+DR-10 and DR-11 were added after threat modelling (threat-model.md §11), because no
+existing rule covered these two threats:
+
+- **DR-10** (threat T-4, ATT&CK for ICS T0838 Modify Alarm Settings, T0878 Alarm Suppression).
+  DR-4 does not fire when the account has the technician or admin role (for example stolen
+  credentials), and DR-5 covers only setpoints. DR-6 fires only after the goods are already
+  warm, and widening the alarm range is exactly what keeps DR-6's device alarm silent.
+  DR-10 catches the preparation step before any damage.
+  *Expected alert:* "Alarm range on FRIDGE-00x widened to a..b °C by <user>", with the
+  `config.change` event (old/new value, actor, source IP, role) as evidence.
+- **DR-11** (threat T-7). Every other rule watches the refrigerators; DR-11 watches the
+  monitoring system itself. Quietly raising a threshold or disabling a rule would blind
+  detection without leaving an alert. NFR-4 requires such changes to be *logged*; DR-11
+  turns that log entry into an alert.
+  *Expected alert:* "Detection configuration changed: <file>", with the before/after hash,
+  the diff and the user who made the change as evidence.
 
 ### FR-6 Generate security alerts
 - A rule match shall create a security alert with: alert ID, timestamp, rule ID, severity

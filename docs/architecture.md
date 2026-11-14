@@ -55,7 +55,7 @@ flowchart LR
 
     subgraph DET["3 · Detection & correlation engine"]
         N[Validate & normalise]
-        R[Rules DR-1…DR-9]
+        R[Rules DR-1…DR-11]
         X[Correlation]
         CFG[(config/detection.yaml)]
     end
@@ -123,7 +123,7 @@ carries the label `scenario` (ground truth), which the detection engine never re
 | `baseline.yaml` | — | Normal operation only | none |
 | `brute_force.yaml` | T-3 | 20 failed logins in 3 min from one IP, then a success | DR-1 (+ DR-3) |
 | `stolen_credentials.yaml` | T-2 | Valid login at 02:30 from unknown IP, setpoint 4 → 10 °C | DR-2, DR-3, DR-5, DR-9 |
-| `compromised_controller.yaml` | T-4 | Alarm threshold widened, cooling off, temperature rises | DR-4, DR-6 |
+| `compromised_controller.yaml` | T-4 | Alarm threshold widened, cooling off, temperature rises | DR-6, DR-10 |
 | `sensor_spoofing.yaml` | T-6 | Readings jump 4 → 18 → 4 °C, then constant values | DR-7 |
 | `network_outage.yaml` | T-5 | FRIDGE-002 stops reporting for 5 min | DR-8 |
 | `kill_chain.yaml` | T-3 → T-2 → T-4 → T-7 | Full chain from threat-model.md §8 | DR-1, DR-3, DR-5, DR-9 |
@@ -155,10 +155,11 @@ Rule types:
 
 | Type | Rules | How it works |
 |------|-------|--------------|
-| Single-event | DR-2, DR-3, DR-4, DR-5 | Decision from one event plus static config (hours, allow-list, roles, limits). |
+| Single-event | DR-2, DR-3, DR-4, DR-5, DR-10 | Decision from one event plus static config (hours, allow-list, roles, limits). |
 | Sliding window | DR-1, DR-6, DR-7 | Keeps a per-device `deque` of recent events and checks counts or durations within the window. |
 | Absence | DR-8 | Background check every tick compares `now − last_seen` with 3 × reporting interval. |
 | Correlation | DR-9 | Looks for a suspicious login hit followed by a config change on the same device within the window. |
+| Configuration integrity | DR-11 | At start-up and on every reload, hashes the detection-related config files and compares them with the last entry in `config_history`. |
 
 Every rule implements the same interface:
 
@@ -470,11 +471,15 @@ rules:
   DR-7_sensor_tamper:      { enabled: true, max_jump_c: 10.0, min_c: -40.0, max_c: 50.0, severity: HIGH }
   DR-8_device_silence:     { enabled: true, missed_intervals: 3, severity: MEDIUM }
   DR-9_correlated_attack:  { enabled: true, window_s: 600, severity: CRITICAL }
+  DR-10_alarm_widened:     { enabled: true, severity: HIGH }
+  DR-11_detection_config:  { enabled: true, files: [detection.yaml, devices.yaml, users.yaml], severity: HIGH }
 ```
 
 On start-up the engine hashes each config file and compares it with the last entry in
-`config_history`; any difference is recorded (who/when/diff). This covers threat T-7
-(detection thresholds quietly raised).
+`config_history`; any difference is recorded (who/when/diff) and raises a DR-11 alert.
+This covers threat T-7 (detection thresholds quietly raised). `devices.yaml` (allow-lists)
+and `users.yaml` (roles, maintenance window) are included because they also change what
+the rules detect.
 
 ## 8. Planned repository layout
 

@@ -38,7 +38,7 @@
   <rect x="780" y="100" width="280" height="210" rx="12" fill="#fff7ed" stroke="#f97316" stroke-width="2"/>
   <text x="920" y="128" text-anchor="middle" font-size="15" font-weight="700" fill="#7c2d12">3 · Detection &amp; correlation</text>
   <text x="920" y="160" text-anchor="middle" font-size="13" fill="#1e293b">Validate &amp; normalise events</text>
-  <text x="920" y="184" text-anchor="middle" font-size="13" fill="#1e293b">Rules DR-1 … DR-9</text>
+  <text x="920" y="184" text-anchor="middle" font-size="13" fill="#1e293b">Rules DR-1 … DR-11</text>
   <text x="920" y="208" text-anchor="middle" font-size="13" fill="#1e293b">Sliding windows · correlation</text>
   <text x="920" y="232" text-anchor="middle" font-size="13" fill="#1e293b">Severity · ATT&amp;CK tags · dedup</text>
   <rect x="820" y="250" width="200" height="34" rx="6" fill="#ffffff" stroke="#fdba74" stroke-dasharray="4 3"/>
