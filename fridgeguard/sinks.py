@@ -140,8 +140,11 @@ class SQLiteSink:
     the dashboard sees live data without one transaction per reading.
     """
 
-    def __init__(self, store, commit_every_n: int = 1000, commit_every_s: float = 1.0) -> None:
+    def __init__(
+        self, store, commit_every_n: int = 1000, commit_every_s: float = 1.0, on_stored=None
+    ) -> None:
         self.store = store
+        self.on_stored = on_stored  # called with each IngestResult that was stored
         self.commit_every_n = commit_every_n
         self.commit_every_s = commit_every_s
         self._clock = time.monotonic
@@ -156,6 +159,8 @@ class SQLiteSink:
             self.rejected += 1
         elif not result.duplicate:
             self.stored += 1
+            if self.on_stored:
+                self.on_stored(result)
         self._pending += 1
         now = self._clock()
         if self._pending >= self.commit_every_n or now - self._last_commit >= self.commit_every_s:

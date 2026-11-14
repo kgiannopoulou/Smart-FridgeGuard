@@ -62,7 +62,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sim.add_argument("--no-activity", action="store_true", help="simulate fridges only")
     sim.add_argument("--anomalies-per-day", type=float, help="suspicious activities per day")
+    sim.add_argument(
+        "--faults-per-day",
+        type=float,
+        help="device faults (compressor failure, offline) per day (default 0)",
+    )
+    sim.add_argument(
+        "--no-detect", action="store_true", help="store events without running detection"
+    )
     sim.add_argument("--config-dir", type=Path, help="alternative config directory")
+
+    # ---- detect ----
+    det = sub.add_parser(
+        "detect",
+        help="run the detection rules over all stored events",
+        description="Run config/detection.yaml over every stored event. Safe to repeat: "
+        "existing alerts are found again, not duplicated.",
+    )
+    det.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
+    det.add_argument("--config-dir", type=Path, help="alternative config directory")
+
+    # ---- alerts ----
+    al = sub.add_parser("alerts", help="list and inspect security alerts")
+    al.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
+    al_sub = al.add_subparsers(dest="alerts_command", required=True)
+    al_list = al_sub.add_parser("list", help="list alerts (oldest first)")
+    al_list.add_argument("--rule", dest="rule_id", help="e.g. DET-002")
+    al_list.add_argument("--severity", choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"])
+    al_list.add_argument("--device")
+    al_list.add_argument("--status", choices=["open", "acknowledged", "resolved", "false_positive"])
+    al_list.add_argument("--limit", type=int, default=0, help="number of alerts (0 = all)")
+    al_show = al_sub.add_parser("show", help="one alert with its evidence")
+    al_show.add_argument("alert_id", help="e.g. ALR-000001")
+    al_sub.add_parser("rules", help="show the configured detection rules")
+    al.add_argument("--config-dir", type=Path, help="alternative config directory")
 
     # ---- events ----
     ev = sub.add_parser("events", help="query the centralized event database")
@@ -119,7 +152,10 @@ def run_simulate(args: argparse.Namespace) -> int:
             interval_s=args.interval,
             activity=False if args.no_activity else None,
             anomalies_per_day=args.anomalies_per_day,
+            faults_per_day=args.faults_per_day,
         )
+        if settings.faults_per_day < 0:
+            raise ValueError("--faults-per-day must be >= 0")
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -132,12 +168,28 @@ def run_simulate(args: argparse.Namespace) -> int:
         sinks.append(log)
 
     sim = Simulation(settings, sinks, args.config_dir)
-    db_sink = None
+    db_sink = detector = None
     if str(args.db) != "-":
         store = EventStore(args.db)
         store.register_devices(sim.fleet)
         db_sink = SQLiteSink(store)
         sim.sinks.append(db_sink)
+        if not args.no_detect:
+            from fridgeguard.detection import Detector
+
+            try:
+                detector = Detector.from_config(
+                    store, args.config_dir, on_alert=_alert_printer(args.show)
+                )
+            except ValueError as exc:
+                print(f"error in detection config: {exc}", file=sys.stderr)
+                return 2
+
+            def detect_stored(result) -> None:
+                kind = "telemetry" if result.table == "telemetry" else "security"
+                detector.process_row(kind, store.record_row(kind, result.ref))
+
+            db_sink.on_stored = detect_stored
 
     mode = f"real time x{args.speed:g}" if args.realtime else "fast"
     span = args.duration or "continuous (Ctrl+C to stop)"
@@ -150,6 +202,8 @@ def run_simulate(args: argparse.Namespace) -> int:
         ticks = sim.run(duration, realtime=args.realtime, speed=args.speed)
     except KeyboardInterrupt:
         ticks = None
+    if detector:
+        detector.finish(sim.now)
     if db_sink:
         db_sink.store.close()
 
@@ -159,9 +213,129 @@ def run_simulate(args: argparse.Namespace) -> int:
     where = f" -> {', '.join(targets)}" if targets else ""
     done = f"{ticks} ticks, " if ticks is not None else "stopped, "
     print(f"# {done}{sim.events_emitted} events{where}", file=sys.stderr)
+    if detector:
+        s = detector.summary
+        rules = ", ".join(f"{k} {v}" for k, v in sorted(s.by_rule.items())) or "none"
+        print(
+            f"# detection: {len(s.new_alerts)} new alerts from {s.hits} rule hits ({rules})",
+            file=sys.stderr,
+        )
     if db_sink and db_sink.rejected:
         print(f"# warning: {db_sink.rejected} events rejected by the database", file=sys.stderr)
     return 0
+
+
+def _alert_printer(show: str):
+    def print_alert(alert) -> None:
+        if show == "none" or not alert.new:
+            return
+        ts = alert.ts.strftime("%Y-%m-%d %H:%M:%SZ")
+        print(
+            f"{ts}  ALERT {alert.alert_id} {alert.severity:<8} {alert.rule_id}  {alert.title}",
+            flush=True,
+        )
+
+    return print_alert
+
+
+# ---- detect / alerts ----------------------------------------------------------------------
+def run_detect(args: argparse.Namespace) -> int:
+    from fridgeguard.detection import Detector
+    from fridgeguard.storage import EventStore
+
+    _utf8_stdout()
+    if not Path(args.db).exists():
+        print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
+        return 2
+    store = EventStore(args.db)
+    try:
+        detector = Detector.from_config(store, args.config_dir)
+    except ValueError as exc:
+        print(f"error in detection config: {exc}", file=sys.stderr)
+        store.close()
+        return 2
+    summary = detector.run()
+    total = store.stats()["alerts"]
+    store.close()
+    rules = ", ".join(f"{r.rule_id}" for r in detector.rules)
+    print(f"rules:      {rules}")
+    print(f"records:    {summary.records} scanned")
+    hits = ", ".join(f"{k} {v}" for k, v in sorted(summary.by_rule.items())) or "none"
+    print(f"rule hits:  {summary.hits} ({hits})")
+    print(f"alerts:     {len(summary.new_alerts)} new, {total} in the database")
+    for a in summary.new_alerts:
+        print(f"  {a.alert_id}  {a.severity:<8} {a.rule_id}  {a.title}")
+    return 0
+
+
+def run_alerts(args: argparse.Namespace) -> int:
+    import json
+
+    from fridgeguard.storage import EventStore
+
+    _utf8_stdout()
+    if args.alerts_command == "rules":
+        from fridgeguard.detection import load_rules
+
+        rules, dedup = load_rules(args.config_dir)
+        for r in rules:
+            params = ", ".join(f"{k}={v}" for k, v in r.params.items())
+            print(f"{r.rule_id}  {r.severity:<8} {r.name}  [{r.type_name}]")
+            print(f"          implements {', '.join(r.implements)}; ATT&CK {', '.join(r.attack)}")
+            print(f"          {params}")
+        print(f"(alerts for the same rule and subject within {dedup:g} s are grouped)")
+        return 0
+    if not Path(args.db).exists():
+        print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
+        return 2
+    store = EventStore(args.db, read_only=True)
+    try:
+        if args.alerts_command == "list":
+            rows = store.alerts(
+                limit=args.limit or None,
+                rule_id=args.rule_id,
+                severity=args.severity,
+                device=args.device,
+                status=args.status,
+            )
+            print(format_alert_table(rows))
+        else:
+            alert = store.alert(args.alert_id)
+            if alert is None:
+                print(f"error: no alert {args.alert_id}", file=sys.stderr)
+                return 2
+            print(
+                f"{alert['alert_id']}  {alert['severity']}  {alert['rule_id']} {alert['rule_name']}"
+            )
+            print(f"title:       {alert['title']}")
+            print(f"description: {alert['description']}")
+            print(f"device:      {alert['device_id']}   subject: {alert['subject']}")
+            print(f"first seen:  {alert['first_seen']}   last seen: {alert['last_seen']}")
+            print(f"status:      {alert['status']}")
+            print(f"ATT&CK:      {', '.join(json.loads(alert['attack_ids']))}")
+            print(f"implements:  {', '.join(json.loads(alert['implements']))}")
+            print(f"evidence ({alert['evidence_count']}):")
+            for ev in store.alert_evidence(args.alert_id):
+                print(f"  {ev['record_id']:<11} {_fmt_ts(ev['ts'])}  {ev['note']}")
+    finally:
+        store.close()
+    return 0
+
+
+def format_alert_table(rows: list[dict]) -> str:
+    header = (
+        f"{'Alert ID':<11} {'First seen (UTC)':<16}  {'Severity':<8} {'Rule':<8} "
+        f"{'Device':<10}  {'Ev.':>3}  {'Status':<8} Title"
+    )
+    lines = [header, "-" * 110]
+    for r in rows:
+        lines.append(
+            f"{r['alert_id']:<11} {_fmt_ts(r['first_seen']):<16}  {r['severity']:<8} "
+            f"{r['rule_id']:<8} {r['device_id'] or '-':<10}  {r['evidence_count']:>3}  "
+            f"{r['status']:<8} {r['title']}"
+        )
+    lines.append(f"({len(rows)} alerts)")
+    return "\n".join(lines)
 
 
 # ---- events ------------------------------------------------------------------------------
@@ -296,6 +470,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_simulate(args)
     if args.command == "events":
         return run_events(args)
+    if args.command == "detect":
+        return run_detect(args)
+    if args.command == "alerts":
+        return run_alerts(args)
     parser.print_help()
     return 0
 

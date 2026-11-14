@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS event_status_history (
     ts          TEXT NOT NULL,
     status      TEXT NOT NULL CHECK (status IN ('normal', 'suspicious', 'malicious')),
     reason      TEXT NOT NULL,
-    set_by      TEXT NOT NULL            -- 'ingest', a rule ID such as 'DR-4', or an analyst
+    set_by      TEXT NOT NULL            -- 'ingest', a rule ID such as 'DET-001', or an analyst
 );
 CREATE INDEX IF NOT EXISTS idx_status_event ON event_status_history(event_ref, id);
 
@@ -123,15 +123,20 @@ CREATE TRIGGER IF NOT EXISTS rejected_no_delete BEFORE DELETE ON rejected_events
 BEGIN SELECT RAISE(ABORT, 'rejected_events is append-only'); END;
 
 -- ---- views --------------------------------------------------------------------------
+-- Views hold no data, so they are dropped and recreated on every start: existing
+-- databases always get the current definitions.
+DROP VIEW IF EXISTS v_security_events;
+DROP VIEW IF EXISTS v_event_status;
+DROP VIEW IF EXISTS v_alerts;
 -- Latest status per security event.
-CREATE VIEW IF NOT EXISTS v_event_status AS
+CREATE VIEW v_event_status AS
 SELECT h.event_ref, h.status, h.reason, h.set_by, h.ts
 FROM event_status_history h
 JOIN (SELECT event_ref, MAX(id) AS max_id FROM event_status_history GROUP BY event_ref) last
   ON h.id = last.max_id;
 
 -- The centralized event log in the format analysts read.
-CREATE VIEW IF NOT EXISTS v_security_events AS
+CREATE VIEW v_security_events AS
 SELECT
     e.event_id,
     e.ts_device                                   AS timestamp,
@@ -155,3 +160,56 @@ SELECT
     e.id                                          AS ref
 FROM security_events e
 LEFT JOIN v_event_status s ON s.event_ref = e.id;
+
+-- ---- security alerts (Step 8) -------------------------------------------------------
+-- One alert groups repeated hits of a rule for the same subject (device, source IP, ...).
+-- alert_key is deterministic (rule + subject + first evidence), so running detection
+-- again over the same events finds the existing alert instead of creating a duplicate.
+CREATE TABLE IF NOT EXISTS alerts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id    TEXT GENERATED ALWAYS AS ('ALR-' || printf('%06d', id)) STORED,
+    alert_key   TEXT NOT NULL UNIQUE,
+    rule_id     TEXT NOT NULL,
+    rule_name   TEXT NOT NULL,
+    severity    TEXT NOT NULL CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    device_id   TEXT REFERENCES devices(device_id),
+    subject     TEXT NOT NULL,            -- what the alert is about: device, source IP, user
+    title       TEXT NOT NULL,
+    description TEXT NOT NULL,
+    attack_ids  TEXT NOT NULL,            -- JSON array of ATT&CK technique IDs
+    implements  TEXT NOT NULL,            -- JSON array of requirement IDs (DR-x)
+    first_seen  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open', 'acknowledged', 'resolved', 'false_positive'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_alert_id ON alerts(alert_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_rule ON alerts(rule_id, first_seen);
+
+-- Evidence: the telemetry readings and security events behind each alert (append-only).
+CREATE TABLE IF NOT EXISTS alert_evidence (
+    alert_ref   INTEGER NOT NULL REFERENCES alerts(id),
+    record_id   TEXT NOT NULL,            -- EVT-000123 or TEL-004567
+    kind        TEXT NOT NULL CHECK (kind IN ('security', 'telemetry')),
+    ts          TEXT NOT NULL,
+    note        TEXT NOT NULL,
+    PRIMARY KEY (alert_ref, record_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS alert_evidence_no_update BEFORE UPDATE ON alert_evidence
+BEGIN SELECT RAISE(ABORT, 'alert_evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS alert_evidence_no_delete BEFORE DELETE ON alert_evidence
+BEGIN SELECT RAISE(ABORT, 'alert_evidence is append-only'); END;
+
+-- Alerts with hit count and time of the latest evidence.
+CREATE VIEW v_alerts AS
+SELECT
+    a.alert_id, a.rule_id, a.rule_name, a.severity, a.device_id, a.subject, a.title,
+    a.description, a.attack_ids, a.implements, a.first_seen,
+    -- latest of: when the alert condition was met, newest evidence
+    MAX(a.first_seen, COALESCE(MAX(ev.ts), a.first_seen)) AS last_seen,
+    COUNT(ev.record_id)                AS evidence_count,
+    a.status, a.created_at, a.id AS ref
+FROM alerts a
+LEFT JOIN alert_evidence ev ON ev.alert_ref = a.id
+GROUP BY a.id;

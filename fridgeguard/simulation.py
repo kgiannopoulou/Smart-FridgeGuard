@@ -23,6 +23,7 @@ from fridgeguard.config import load_yaml
 from fridgeguard.generator.activity import ActivitySimulator
 from fridgeguard.generator.auth import AuthService, UserDirectory
 from fridgeguard.models import Event
+from fridgeguard.simulator.faults import FaultInjector
 from fridgeguard.simulator.fleet import Fleet
 from fridgeguard.sinks import EventSink
 from fridgeguard.timeutil import parse_utc
@@ -35,6 +36,7 @@ class SimulationSettings:
     interval_s: float = 60.0
     activity: bool = True
     anomalies_per_day: float = 2.0
+    faults_per_day: float = 0.0
     password_hash_iterations: int = 100_000
 
     @classmethod
@@ -47,6 +49,7 @@ class SimulationSettings:
             "interval_s": float(cfg.get("interval_s", 60)),
             "activity": activity.get("enabled", True),
             "anomalies_per_day": float(activity.get("anomalies_per_day", 2.0)),
+            "faults_per_day": float(cfg.get("faults", {}).get("per_day", 0.0)),
             "password_hash_iterations": int(cfg.get("password_hash_iterations", 100_000)),
         }
         values.update({k: v for k, v in overrides.items() if v is not None})
@@ -77,6 +80,10 @@ class Simulation:
             if settings.activity
             else None
         )
+        # separate random stream: enabling faults does not change the user activity
+        self.faults = FaultInjector(
+            self.fleet, random.Random(settings.seed + 1_000_003), settings.faults_per_day
+        )
 
     def emit(self, event: Event) -> None:
         self.events_emitted += 1
@@ -86,6 +93,7 @@ class Simulation:
     def step(self) -> None:
         if self.activity:
             self.activity.tick(self.now)
+        self.faults.tick(self.now)
         for event in self.fleet.tick(self.now, self.settings.interval_s):
             self.emit(event)
         self.now += timedelta(seconds=self.settings.interval_s)

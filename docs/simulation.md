@@ -37,6 +37,9 @@ event database `data/fridgeguard.db` (both git-ignored; see [event-database.md](
 | `--show` | `all` | Console output: `all`, `activity` (no temperatures) or `none`. |
 | `--no-activity` | off | Simulate fridges only. |
 | `--anomalies-per-day` | 2 | Average number of suspicious activities per day; `0` = clean baseline. |
+| `--faults-per-day` | 0 | Device faults (compressor failure, device offline) per day; added in Step 8, see [detection-engine.md §7](detection-engine.md#7-device-faults-for-testing-det-003-and-det-005). |
+| `--db` | `data/fridgeguard.db` | Event database; `-` disables it. |
+| `--no-detect` | off | Store events without running the detection rules. |
 
 Defaults come from `config/simulation.yaml`; command-line options override them.
 

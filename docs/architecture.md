@@ -133,10 +133,16 @@ carries the label `scenario` (ground truth), which the detection engine never re
 | | |
 |---|---|
 | **Responsibility** | Turn the event stream into classified events and security alerts. |
-| **Implementation** | `fridgeguard/detection/` with `pipeline.py`, `rules/`, `correlation.py`, `state.py`. |
-| **Input** | Events from the queue. |
-| **Output** | Stored events (with classification) and alerts, both written through the storage layer. |
+| **Implementation** | `fridgeguard/detection/detector.py` (engine) and one module per rule type in `fridgeguard/detection/rules/`. Details: [detection-engine.md](detection-engine.md). |
+| **Input** | Stored events in time order: live, right after each event is stored, or as a batch over the whole database. |
+| **Output** | Alerts with linked evidence, and status verdicts on security events, written through the event store. |
 | **Requirements** | FR-5, FR-6, NFR-3, NFR-4 |
+
+> **Implemented in Step 8** as rules DET-001…DET-006, configured in `config/detection.yaml`
+> (mapping to DR-x in [detection-engine.md §9](detection-engine.md#9-coverage-of-the-requirements)).
+> Steps 1–3 below are done by the event store (Step 7), and classification uses the
+> append-only `event_status_history` table. Correlation (DR-9), configuration integrity (DR-11)
+> and the severity increase for the medical fridge are still planned.
 
 Processing steps for each event:
 
@@ -164,17 +170,21 @@ Rule types:
 Every rule implements the same interface:
 
 ```python
-class Rule(Protocol):
-    rule_id: str            # "DR-1"
-    severity: Severity      # LOW | MEDIUM | HIGH | CRITICAL
-    attack: list[str]       # ["T1110", "T0859"]
+class Rule:                               # fridgeguard/detection/rules/base.py
+    type_name: str                        # "failed_logins", used in detection.yaml
+    rule_id: str                          # "DET-002", from the config
+    severity: str                         # LOW | MEDIUM | HIGH | CRITICAL
+    attack: list[str]                     # ["T1110"]
 
-    def evaluate(self, event: Event, state: DeviceState) -> RuleHit | None: ...
+    def evaluate(self, record: Record) -> list[RuleHit]: ...   # every stored event
+    def advance(self, now: datetime) -> list[RuleHit]: ...     # time moved on (absence rules)
 ```
 
-**De-duplication:** hits from the same rule on the same device within
-`dedup_window_s` are grouped into one open alert; the alert's `hit_count` and
-`last_seen` are updated and the new event is linked as evidence.
+Per-device or per-source state (sliding windows, last-seen times) lives inside each rule object.
+
+**De-duplication:** hits from the same rule for the same subject (device, source IP or
+user) within `dedup_window_s` are grouped into one alert; the new records are linked as
+evidence and the evidence count and last-seen time grow (view `v_alerts`).
 
 **Severity** comes from the rule and is raised one level when the device is
 a medical fridge (FRIDGE-003) or when the hit is part of a correlation.
@@ -465,7 +475,9 @@ records the action in `config_history`.
 | `scenarios/*.yaml` | Attack and baseline scenarios. |
 | `.env` | Secrets (dashboard analyst password hash, optional ThingsBoard tokens). Git-ignored. |
 
-Example `config/detection.yaml`:
+The implemented rules are in [`config/detection.yaml`](../config/detection.yaml) (DET-001…DET-006,
+see [detection-engine.md](detection-engine.md)). The original design sketch below, written in
+terms of the DR-x requirements, is kept for the rules that are still planned:
 
 ```yaml
 dedup_window_s: 600

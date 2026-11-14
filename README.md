@@ -25,6 +25,7 @@ SOC dashboard supports alert triage and incident investigation.
 | | 5. Build the refrigerator simulation engine | `fridgeguard/simulator/`, [docs/simulation.md](docs/simulation.md) | Done |
 | | 6. Build the user and activity simulator | `fridgeguard/generator/`, [docs/simulation.md](docs/simulation.md) | Done |
 | 2 – Cybersecurity detection engine | 7. Build the event logging system | `fridgeguard/storage/`, [docs/event-database.md](docs/event-database.md) | Done |
+| | 8. Develop the detection engine | [`fridgeguard/detection/detector.py`](fridgeguard/detection/detector.py), rules in `fridgeguard/detection/rules/`, [`config/detection.yaml`](config/detection.yaml), [docs/detection-engine.md](docs/detection-engine.md) | Done |
 
 ## Quick start
 
@@ -53,6 +54,29 @@ suspiciously. Role-based access control and a maintenance window decide what is 
 All events go to the console, `data/events.jsonl` and the SQLite event database
 `data/fridgeguard.db`. See [docs/simulation.md](docs/simulation.md).
 
+## Detect suspicious behaviour
+
+```powershell
+python -m fridgeguard simulate --duration 7d --faults-per-day 0.5 --show none   # live detection
+python -m fridgeguard alerts list
+python -m fridgeguard alerts show ALR-000001
+python -m fridgeguard detect                                   # re-run rules over stored events
+```
+
+| Rule | Detects | Severity |
+|------|---------|----------|
+| DET-001 | Unauthorized setpoint change | Critical |
+| DET-002 | Multiple failed logins (5+ from one source in 5 min) | High |
+| DET-003 | Temperature outside configured limits (15+ min) | High |
+| DET-004 | Access outside maintenance hours | Medium |
+| DET-005 | Missing device heartbeat | High |
+| DET-006 | Unauthorized user configuration change | Critical |
+
+Thresholds, windows and severities are set in `config/detection.yaml`, not in code. Over a
+simulated week the rules caught every injected unauthorized change, off-hours session,
+compressor failure and outage, with no false positives. See
+[docs/detection-engine.md](docs/detection-engine.md).
+
 ## Query the event database
 
 ```powershell
@@ -73,4 +97,5 @@ append-only tables. See [docs/event-database.md](docs/event-database.md).
 - [Architecture](docs/architecture.md): components, data flow, event schema, SQLite schema, detection engine design, configuration, tech stack, security design
 - [Development setup](docs/development-setup.md): tools, virtual environment, VS Code, project folders, everyday commands
 - [Simulation](docs/simulation.md): refrigerator thermal model, reading format, users and roles, authentication, authorization, activity events
+- [Detection engine](docs/detection-engine.md): rules DET-001…DET-006, configuration, alert grouping and evidence, results against ground truth
 - [Event database](docs/event-database.md): telemetry vs. security audit events, event fields and types, status, integrity, CLI and SQL access

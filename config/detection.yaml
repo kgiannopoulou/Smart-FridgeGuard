@@ -1,0 +1,89 @@
+# Detection rules (Phase 2, Step 8).
+#
+# Each rule names a rule *type* (a Python class in fridgeguard/detection/rules/) and
+# the parameters for it. Thresholds, windows, severities and even new rules of an
+# existing type are changed here, without touching Python code (NFR-4).
+#
+# Common fields
+#   name          shown in alerts
+#   type          rule type (see docs/detection-engine.md for the list)
+#   enabled       false switches the rule off
+#   severity      LOW | MEDIUM | HIGH | CRITICAL
+#   implements    requirement IDs from requirements.md (traceability)
+#   attack        MITRE ATT&CK technique IDs (ICS unless marked Enterprise)
+#   params        type-specific settings
+
+# Repeated hits of the same rule for the same subject (device, source IP, ...) within
+# this many seconds of the last hit are grouped into one alert.
+dedup_window_s: 900
+
+rules:
+  DET-001:
+    name: Unauthorized setpoint change
+    type: unauthorized_change
+    enabled: true
+    severity: CRITICAL
+    implements: [DR-4, DR-5]
+    attack: [T0836, T0859]
+    params:
+      parameters: [setpoint_c]
+
+  DET-002:
+    name: Multiple failed logins
+    type: failed_logins
+    enabled: true
+    severity: HIGH
+    implements: [DR-1]
+    attack: [T1110]          # Brute Force (Enterprise); ICS has no equivalent
+    params:
+      threshold: 5           # failed attempts ...
+      window_s: 300          # ... within 5 minutes ...
+      group_by: source_ip    # ... from the same source (source_ip | user | device_id)
+
+  DET-003:
+    name: Temperature outside configured limits
+    type: temperature_limits
+    enabled: true
+    severity: HIGH
+    implements: [DR-6]
+    attack: [T0879, T0831]
+    params:
+      min_duration_s: 900    # must stay outside the expected range this long (ignores door openings)
+      margin_c: 0.0          # extra tolerance beyond the device's expected range
+
+  DET-004:
+    name: Access outside maintenance hours
+    type: maintenance_hours
+    enabled: true
+    severity: MEDIUM
+    implements: [DR-2]
+    attack: [T0859]
+    params:
+      roles: [technician, admin]       # accounts that may only work in the window
+      event_types: [LOGIN_SUCCESS, SETPOINT_CHANGE, ALARM_THRESHOLD_CHANGE,
+                    CONFIG_CHANGE, FIRMWARE_UPDATE]
+      maintenance_window:              # site time zone from config/devices.yaml
+        days: [mon, tue, wed, thu, fri]
+        start: "06:00"
+        end: "09:00"
+
+  DET-005:
+    name: Missing device heartbeat
+    type: missing_heartbeat
+    enabled: true
+    severity: HIGH
+    implements: [DR-8]
+    attack: [T0804, T0829]
+    params:
+      expected_interval_s: 60
+      missed_intervals: 3    # alert after 3 x 60 s without a reading
+
+  DET-006:
+    name: Unauthorized user configuration change
+    type: unauthorized_change
+    enabled: true
+    severity: CRITICAL
+    implements: [DR-4, DR-10]
+    attack: [T0836, T0838, T0859]
+    params:
+      parameters: [alarm_low_c, alarm_high_c, defrost_interval_h, firmware_version]

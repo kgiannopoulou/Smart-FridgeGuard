@@ -6,3 +6,5 @@ password_hash_iterations: 100000 # PBKDF2-HMAC-SHA256
 activity:
   enabled: true
   anomalies_per_day: 2           # average number of suspicious activities injected per day
+faults:
+  per_day: 0                     # device faults (compressor failure, offline) per day; try 0.5

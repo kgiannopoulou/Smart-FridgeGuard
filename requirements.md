@@ -118,6 +118,22 @@ DR-2 (login 00:00–05:00) and DR-9 (login followed by a change); daytime change
 window are recorded (`within_maintenance_window: false`) and marked `suspicious` when stored
 (Step 7, docs/event-database.md §4), but no rule raises an *alert* for them yet.
 
+**Implementation (Step 8).** The detection engine implements these requirements as
+configurable rules DET-001…DET-006 (`config/detection.yaml`, docs/detection-engine.md):
+
+| Implemented rule | Severity | Requirements covered |
+|------------------|----------|----------------------|
+| DET-001 Unauthorized setpoint change | Critical | DR-4 (setpoints), DR-5 when unauthorised |
+| DET-002 Multiple failed logins (≥ 5 from one source in 5 min) | High | DR-1 |
+| DET-003 Temperature outside configured limits (≥ 15 min) | High | DR-6 |
+| DET-004 Access outside maintenance hours | Medium | DR-2 (stricter: maintenance window) |
+| DET-005 Missing device heartbeat (3 × 60 s) | High | DR-8 |
+| DET-006 Unauthorized user configuration change | Critical | DR-4 (other settings), DR-10 when unauthorised |
+
+The severities of DET-001 and DET-006 (Critical) are higher than the DR-4 default (High), as
+specified for the implementation. DR-3, DR-7, DR-9, DR-11 and the *authorised* cases of
+DR-5 and DR-10 are not implemented yet.
+
 DR-10 and DR-11 were added after threat modelling (threat-model.md §11), because no
 existing rule covered these two threats:
 

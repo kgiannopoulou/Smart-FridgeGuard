@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import sqlite3
 from collections.abc import Iterable
@@ -26,7 +27,7 @@ from fridgeguard.models import Event, iso_utc
 from fridgeguard.simulator.fleet import Fleet
 from fridgeguard.storage.normalize import STATUSES, ValidationError, event_from_json, normalize
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 SECURITY_FILTERS = {
     "device": "device = ?",
@@ -36,6 +37,14 @@ SECURITY_FILTERS = {
     "scenario": "scenario = ?",
     "since": "timestamp >= ?",
     "until": "timestamp < ?",
+}
+ALERT_FILTERS = {
+    "rule_id": "rule_id = ?",
+    "severity": "severity = ?",
+    "device": "device_id = ?",
+    "status": "status = ?",
+    "since": "first_seen >= ?",
+    "until": "first_seen < ?",
 }
 TELEMETRY_FILTERS = {
     "device": "device_id = ?",
@@ -71,7 +80,8 @@ class EventStore:
             self.conn.execute("PRAGMA journal_mode = WAL")
             self.conn.executescript(_load_schema())
             self.conn.execute(
-                "INSERT OR IGNORE INTO schema_info (key, value) VALUES ('version', ?)",
+                "INSERT INTO schema_info (key, value) VALUES ('version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (SCHEMA_VERSION,),
             )
             self.conn.commit()
@@ -152,6 +162,103 @@ class EventStore:
     def commit(self) -> None:
         self.conn.commit()
 
+    # ---- detection support (Step 8) ----------------------------------------------------
+    def raise_status(self, record_id: str, status: str, reason: str, set_by: str, ts: str) -> bool:
+        """Record a rule's verdict on a security event.
+
+        The status is appended only if it is not lower than the current one and this rule
+        has not already judged the event (so re-running detection adds nothing).
+        Returns True if a row was appended.
+        """
+        if status not in STATUSES:
+            raise ValueError(f"status must be one of {STATUSES}")
+        row = self.conn.execute(
+            """SELECT e.id, COALESCE(s.status, 'normal') AS current
+               FROM security_events e LEFT JOIN v_event_status s ON s.event_ref = e.id
+               WHERE e.event_id = ?""",
+            (record_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown event {record_id}")
+        if STATUSES.index(status) < STATUSES.index(row["current"]):
+            return False
+        seen = self.conn.execute(
+            "SELECT 1 FROM event_status_history WHERE event_ref = ? AND set_by = ?",
+            (row["id"], set_by),
+        ).fetchone()
+        if seen:
+            return False
+        self._add_status(row["id"], status, reason, set_by, ts)
+        return True
+
+    def get_or_create_alert(self, alert: dict[str, Any]) -> tuple[str, bool]:
+        """Insert an alert unless one with the same ``alert_key`` exists.
+
+        Returns ``(alert_id, created)``.
+        """
+        columns = ", ".join(alert)
+        marks = ", ".join("?" for _ in alert)
+        cur = self.conn.execute(
+            f"INSERT OR IGNORE INTO alerts ({columns}) VALUES ({marks})", list(alert.values())
+        )
+        alert_id = self.conn.execute(
+            "SELECT alert_id FROM alerts WHERE alert_key = ?", (alert["alert_key"],)
+        ).fetchone()[0]
+        return alert_id, cur.rowcount == 1
+
+    def add_evidence(self, alert_id: str, record_id: str, kind: str, ts: str, note: str) -> None:
+        self.conn.execute(
+            """INSERT OR IGNORE INTO alert_evidence (alert_ref, record_id, kind, ts, note)
+               SELECT id, ?, ?, ?, ? FROM alerts WHERE alert_id = ?""",
+            (record_id, kind, ts, note, alert_id),
+        )
+
+    def iter_records(self):
+        """All stored telemetry and security events, merged in time order.
+
+        Yields ``(kind, row)`` with kind ``"telemetry"`` or ``"security"``. Within the same
+        timestamp, security events come first (they happened between two readings).
+        """
+        sec = self.conn.execute(
+            """SELECT e.*, COALESCE(s.status, 'normal') AS status
+               FROM security_events e LEFT JOIN v_event_status s ON s.event_ref = e.id
+               ORDER BY e.ts_device, e.id"""
+        )
+        tel = self.conn.execute("SELECT * FROM telemetry ORDER BY ts_device, id")
+        tagged_sec = ((r["ts_device"], 0, r["id"], "security", dict(r)) for r in sec)
+        tagged_tel = ((r["ts_device"], 1, r["id"], "telemetry", dict(r)) for r in tel)
+        for _, _, _, kind, row in heapq.merge(tagged_sec, tagged_tel):
+            yield kind, row
+
+    def record_row(self, kind: str, ref: int) -> dict[str, Any]:
+        """One stored record by internal row id (used by the live pipeline)."""
+        if kind == "telemetry":
+            sql = "SELECT * FROM telemetry WHERE id = ?"
+        else:
+            sql = """SELECT e.*, COALESCE(s.status, 'normal') AS status
+                     FROM security_events e LEFT JOIN v_event_status s ON s.event_ref = e.id
+                     WHERE e.id = ?"""
+        return dict(self.conn.execute(sql, (ref,)).fetchone())
+
+    def alerts(self, limit: int | None = None, newest_first: bool = False, **filters):
+        return self._query(
+            "v_alerts", "first_seen, ref", ALERT_FILTERS, filters, limit, newest_first
+        )
+
+    def alert(self, alert_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM v_alerts WHERE alert_id = ?", (alert_id,))
+        found = row.fetchone()
+        return dict(found) if found else None
+
+    def alert_evidence(self, alert_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT ev.record_id, ev.kind, ev.ts, ev.note FROM alert_evidence ev
+               JOIN alerts a ON a.id = ev.alert_ref
+               WHERE a.alert_id = ? ORDER BY ev.ts, ev.record_id""",
+            (alert_id,),
+        )
+        return [dict(r) for r in rows]
+
     def close(self) -> None:
         if not self.read_only:
             self.conn.commit()
@@ -200,6 +307,7 @@ class EventStore:
             "telemetry": q("SELECT COUNT(*) FROM telemetry").fetchone()[0],
             "security_events": q("SELECT COUNT(*) FROM security_events").fetchone()[0],
             "rejected": q("SELECT COUNT(*) FROM rejected_events").fetchone()[0],
+            "alerts": q("SELECT COUNT(*) FROM alerts").fetchone()[0],
             "by_type": dict(
                 q("SELECT event_type, COUNT(*) FROM security_events GROUP BY 1 ORDER BY 2 DESC")
             ),
