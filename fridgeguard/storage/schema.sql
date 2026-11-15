@@ -161,30 +161,45 @@ SELECT
 FROM security_events e
 LEFT JOIN v_event_status s ON s.event_ref = e.id;
 
--- ---- security alerts (Step 8) -------------------------------------------------------
+-- ---- security alerts (Step 8, prioritization and triage Step 10) -------------------
 -- One alert groups repeated hits of a rule for the same subject (device, source IP, ...).
 -- alert_key is deterministic (rule + subject + first evidence), so running detection
 -- again over the same events finds the existing alert instead of creating a duplicate.
+--
+-- base_severity is what the rule says; severity is the current classification after
+-- prioritization (config/prioritization.yaml) or an analyst override (severity_locked).
+-- status is the triage state. Every change of severity or status is recorded in the
+-- append-only alert_history table.
 CREATE TABLE IF NOT EXISTS alerts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    alert_id    TEXT GENERATED ALWAYS AS ('ALR-' || printf('%06d', id)) STORED,
-    alert_key   TEXT NOT NULL UNIQUE,
-    rule_id     TEXT NOT NULL,
-    rule_name   TEXT NOT NULL,
-    severity    TEXT NOT NULL CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
-    device_id   TEXT REFERENCES devices(device_id),
-    subject     TEXT NOT NULL,            -- what the alert is about: device, source IP, user
-    title       TEXT NOT NULL,
-    description TEXT NOT NULL,
-    attack_ids  TEXT NOT NULL,            -- JSON array of ATT&CK technique IDs
-    implements  TEXT NOT NULL,            -- JSON array of requirement IDs (DR-x)
-    first_seen  TEXT NOT NULL,
-    created_at  TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'open'
-                CHECK (status IN ('open', 'acknowledged', 'resolved', 'false_positive'))
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id        TEXT GENERATED ALWAYS AS ('ALR-' || printf('%06d', id)) STORED,
+    alert_key       TEXT NOT NULL UNIQUE,
+    rule_id         TEXT NOT NULL,
+    rule_name       TEXT NOT NULL,
+    severity        TEXT NOT NULL
+                    CHECK (severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    device_id       TEXT REFERENCES devices(device_id),
+    subject         TEXT NOT NULL,            -- what the alert is about: device, source IP, user
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    attack_ids      TEXT NOT NULL,            -- JSON array of ATT&CK technique IDs
+    implements      TEXT NOT NULL,            -- JSON array of requirement IDs (DR-x)
+    first_seen      TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'new'
+                    CHECK (status IN ('new', 'under_investigation', 'confirmed',
+                                      'false_positive', 'resolved')),
+    base_severity   TEXT NOT NULL
+                    CHECK (base_severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    severity_reason TEXT NOT NULL DEFAULT '',
+    severity_locked INTEGER NOT NULL DEFAULT 0 CHECK (severity_locked IN (0, 1)),
+    assigned_to     TEXT,
+    updated_at      TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_alert_id ON alerts(alert_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_rule ON alerts(rule_id, first_seen);
+CREATE INDEX IF NOT EXISTS idx_alerts_device ON alerts(device_id, first_seen);
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status, severity);
 
 -- Evidence: the telemetry readings and security events behind each alert (append-only).
 CREATE TABLE IF NOT EXISTS alert_evidence (
@@ -201,7 +216,26 @@ BEGIN SELECT RAISE(ABORT, 'alert_evidence is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS alert_evidence_no_delete BEFORE DELETE ON alert_evidence
 BEGIN SELECT RAISE(ABORT, 'alert_evidence is append-only'); END;
 
--- Alerts with hit count and time of the latest evidence.
+-- Who changed an alert's status or severity, when and why (append-only).
+CREATE TABLE IF NOT EXISTS alert_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_ref   INTEGER NOT NULL REFERENCES alerts(id),
+    ts          TEXT NOT NULL,
+    actor       TEXT NOT NULL,            -- analyst name, or 'prioritizer'
+    field       TEXT NOT NULL CHECK (field IN ('status', 'severity', 'assigned_to')),
+    old_value   TEXT,
+    new_value   TEXT,
+    note        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_alert_history_alert ON alert_history(alert_ref, id);
+
+CREATE TRIGGER IF NOT EXISTS alert_history_no_update BEFORE UPDATE ON alert_history
+BEGIN SELECT RAISE(ABORT, 'alert_history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS alert_history_no_delete BEFORE DELETE ON alert_history
+BEGIN SELECT RAISE(ABORT, 'alert_history is append-only'); END;
+
+-- Alerts with hit count, time of the latest evidence and a numeric severity rank
+-- (CRITICAL 4 ... INFO 0) for sorting the triage queue.
 CREATE VIEW v_alerts AS
 SELECT
     a.alert_id, a.rule_id, a.rule_name, a.severity, a.device_id, a.subject, a.title,
@@ -209,7 +243,11 @@ SELECT
     -- latest of: when the alert condition was met, newest evidence
     MAX(a.first_seen, COALESCE(MAX(ev.ts), a.first_seen)) AS last_seen,
     COUNT(ev.record_id)                AS evidence_count,
-    a.status, a.created_at, a.id AS ref
+    a.status, a.created_at, a.base_severity, a.severity_reason, a.severity_locked,
+    a.assigned_to, a.updated_at,
+    CASE a.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2
+                    WHEN 'LOW' THEN 1 ELSE 0 END AS severity_rank,
+    a.id AS ref
 FROM alerts a
 LEFT JOIN alert_evidence ev ON ev.alert_ref = a.id
 GROUP BY a.id;

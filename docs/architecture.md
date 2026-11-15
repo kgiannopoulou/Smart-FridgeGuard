@@ -186,8 +186,11 @@ Per-device or per-source state (sliding windows, last-seen times) lives inside e
 user) within `dedup_window_s` are grouped into one alert; the new records are linked as
 evidence and the evidence count and last-seen time grow (view `v_alerts`).
 
-**Severity** comes from the rule and is raised one level when the device is
-a medical fridge (FRIDGE-003) or when the hit is part of a correlation.
+**Severity** comes from the rule (base severity) and is then classified by the
+prioritizer (Step 10, `fridgeguard/detection/prioritizer.py`): refused changes are lowered,
+temperature excursions are graded by deviation, alerts on the medical fridge (FRIDGE-003)
+are raised one level up to High, and an unauthorized change followed by a temperature
+excursion on the same device is Critical. Details: [alert-management.md](alert-management.md).
 
 ### 3.4 SQLite event storage
 
@@ -240,7 +243,7 @@ Pages:
 |---|---|
 | **Responsibility** | Alert triage, grouping alerts into incidents and generating reports. |
 | **Implementation** | `fridgeguard/investigation/` with `triage.py`, `timeline.py`, `report.py`, templates in `templates/report.md.j2`. |
-| **Triage** | Status: `open → acknowledged → resolved` or `false_positive`. Every change is written to `alert_history` with analyst and timestamp. |
+| **Triage** | **Implemented in Step 10** ([alert-management.md](alert-management.md)): status `new → under_investigation → confirmed / false_positive / resolved`, assignment, required notes, severity INFO…CRITICAL from `config/prioritization.yaml`. Every change is written to `alert_history` with analyst and timestamp. |
 | **Incidents** | One or more related alerts grouped into an incident `INC-YYYYMMDD-NNN`. |
 | **Timeline** | All events for the affected devices from 15 min before the first alert to 15 min after the last one. |
 | **Report** | Markdown (Jinja2 template) and optional PDF. Sections: summary, affected devices, timeline, triggered rules with ATT&CK techniques, evidence, impact, recommended actions. |

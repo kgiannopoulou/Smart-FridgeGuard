@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import heapq
 import json
+import re
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from fridgeguard.models import Event, iso_utc
 from fridgeguard.simulator.fleet import Fleet
 from fridgeguard.storage.normalize import STATUSES, ValidationError, event_from_json, normalize
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 SECURITY_FILTERS = {
     "device": "device = ?",
@@ -39,13 +40,30 @@ SECURITY_FILTERS = {
     "until": "timestamp < ?",
 }
 ALERT_FILTERS = {
+    "alert_ids": None,  # list of alert IDs, handled in _query
     "rule_id": "rule_id = ?",
+    "assigned_to": "assigned_to = ?",
+    "min_severity": "severity_rank >= ?",
     "severity": "severity = ?",
     "device": "device_id = ?",
     "status": "status = ?",
     "since": "first_seen >= ?",
     "until": "first_seen < ?",
 }
+SEVERITY_LEVELS = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")  # lowest first
+
+# Alert triage workflow (Step 10). A note is required for every move marked True.
+ALERT_STATUSES = ("new", "under_investigation", "confirmed", "false_positive", "resolved")
+ALERT_TRANSITIONS: dict[str, dict[str, bool]] = {
+    "new": {"under_investigation": False, "false_positive": True, "resolved": True},
+    "under_investigation": {"confirmed": True, "false_positive": True, "resolved": True},
+    "confirmed": {"resolved": True},
+    "false_positive": {"under_investigation": True},  # reopen
+    "resolved": {"under_investigation": True},  # reopen
+}
+# Status names used before Step 10, mapped when an older database is opened.
+LEGACY_ALERT_STATUS = {"open": "new", "acknowledged": "under_investigation"}
+
 TELEMETRY_FILTERS = {
     "device": "device_id = ?",
     "device_status": "device_status = ?",
@@ -78,7 +96,9 @@ class EventStore:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
             self.conn = sqlite3.connect(str(path), check_same_thread=False)
             self.conn.execute("PRAGMA journal_mode = WAL")
-            self.conn.executescript(_load_schema())
+            schema = _load_schema()
+            self._migrate_alerts(schema)
+            self.conn.executescript(schema)
             self.conn.execute(
                 "INSERT INTO schema_info (key, value) VALUES ('version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -88,6 +108,34 @@ class EventStore:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._devices = {r[0] for r in self.conn.execute("SELECT device_id FROM devices")}
+
+    def _migrate_alerts(self, schema: str) -> None:
+        """Upgrade an alerts table created before Step 10 (new severity level, statuses
+        and triage columns). SQLite cannot change a CHECK constraint in place, so the
+        table is rebuilt with the same row IDs; alert_evidence keeps pointing at them."""
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(alerts)")}
+        if not columns or "base_severity" in columns:
+            return
+        create = re.search(r"CREATE TABLE IF NOT EXISTS alerts \(.*?\n\);", schema, re.S)
+        if create is None:
+            raise RuntimeError("alerts definition not found in schema.sql")
+        legacy = " ".join(f"WHEN '{old}' THEN '{new}'" for old, new in LEGACY_ALERT_STATUS.items())
+        copied = (
+            "id, alert_key, rule_id, rule_name, severity, device_id, subject, title, "
+            "description, attack_ids, implements, first_seen, created_at"
+        )
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        self.conn.executescript(
+            f"""BEGIN;
+            DROP VIEW IF EXISTS v_alerts;
+            {create.group(0).replace("IF NOT EXISTS alerts", "alerts_v3")}
+            INSERT INTO alerts_v3 ({copied}, status, base_severity)
+                SELECT {copied}, CASE status {legacy} ELSE status END, severity FROM alerts;
+            DROP TABLE alerts;
+            ALTER TABLE alerts_v3 RENAME TO alerts;
+            COMMIT;"""
+        )
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
     # ---- setup -----------------------------------------------------------------------
     def register_devices(self, fleet: Fleet) -> None:
@@ -196,6 +244,7 @@ class EventStore:
 
         Returns ``(alert_id, created)``.
         """
+        alert = {"base_severity": alert["severity"], **alert}
         columns = ", ".join(alert)
         marks = ", ".join("?" for _ in alert)
         cur = self.conn.execute(
@@ -258,6 +307,161 @@ class EventStore:
             (alert_id,),
         )
         return [dict(r) for r in rows]
+
+    # ---- prioritization support (Step 10) ----------------------------------------------
+    def security_rows(self, event_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Security events by event ID (``EVT-…``); other IDs are ignored."""
+        ids = sorted({i for i in event_ids if i.startswith("EVT-")})
+        found: dict[str, dict[str, Any]] = {}
+        for start in range(0, len(ids), 500):
+            part = ids[start : start + 500]
+            marks = ", ".join("?" for _ in part)
+            rows = self.conn.execute(
+                f"SELECT * FROM security_events WHERE event_id IN ({marks})", part
+            )
+            found.update((r["event_id"], dict(r)) for r in rows)
+        return found
+
+    def readings_from(self, device_id: str, since: datetime, until: datetime):
+        """Readings of one device from ``since`` to ``until`` (inclusive), oldest first."""
+        rows = self.conn.execute(
+            """SELECT * FROM telemetry WHERE device_id = ? AND ts_device >= ? AND ts_device <= ?
+               ORDER BY ts_device, id""",
+            (device_id, iso_utc(since), iso_utc(until)),
+        )
+        return [dict(r) for r in rows]
+
+    # ---- alert management (Step 10) ------------------------------------------------------
+    def alert_queue(self, min_severity: str = "LOW", limit: int | None = None, **filters):
+        """Open alerts (new, under investigation), most severe first, then oldest first."""
+        rows = [
+            r
+            for r in self.alerts(min_severity=SEVERITY_LEVELS.index(min_severity), **filters)
+            if r["status"] in ("new", "under_investigation")
+        ]
+        rows.sort(key=lambda r: (-r["severity_rank"], r["first_seen"], r["ref"]))
+        return rows[:limit] if limit else rows
+
+    def set_alert_status(
+        self,
+        alert_id: str,
+        status: str,
+        actor: str,
+        note: str = "",
+        *,
+        assign: bool = True,
+    ) -> dict[str, Any]:
+        """Move an alert through the triage workflow and record it in alert_history.
+
+        Confirming an alert marks the security events in its evidence ``malicious``;
+        calling it a false positive marks them ``normal`` (set by the analyst).
+        """
+        if status not in ALERT_STATUSES:
+            raise ValueError(f"status must be one of {ALERT_STATUSES}")
+        alert = self.alert(alert_id)
+        if alert is None:
+            raise KeyError(f"unknown alert {alert_id}")
+        current = alert["status"]
+        allowed = ALERT_TRANSITIONS[current]
+        if status not in allowed:
+            options = ", ".join(allowed) or "none"
+            raise ValueError(f"{alert_id} is '{current}'; it can move to: {options}")
+        note = note.strip()
+        if allowed[status] and not note:
+            raise ValueError(f"a note is required to mark an alert '{status}'")
+        now = iso_utc(datetime.now(UTC))
+        self._alert_history(alert["ref"], now, actor, "status", current, status, note)
+        self.conn.execute(
+            "UPDATE alerts SET status = ?, updated_at = ? WHERE id = ?",
+            (status, now, alert["ref"]),
+        )
+        if status == "under_investigation" and assign and alert["assigned_to"] != actor:
+            self._alert_history(
+                alert["ref"],
+                now,
+                actor,
+                "assigned_to",
+                alert["assigned_to"],
+                actor,
+                "assigned when the investigation started",
+            )
+            self.conn.execute(
+                "UPDATE alerts SET assigned_to = ? WHERE id = ?", (actor, alert["ref"])
+            )
+        verdict = {"confirmed": "malicious", "false_positive": "normal"}.get(status)
+        if verdict:
+            reason = f"analyst marked {alert_id} {status}: {note}"
+            for ev in self.alert_evidence(alert_id):
+                if ev["kind"] == "security":
+                    self._add_status(
+                        self._event_ref(ev["record_id"]), verdict, reason, f"analyst:{actor}", now
+                    )
+        self.commit()
+        return self.alert(alert_id)
+
+    def set_alert_severity(
+        self, alert_id: str, severity: str, actor: str, note: str, *, lock: bool = True
+    ) -> bool:
+        """Change an alert's severity. Analyst changes (``lock=True``) need a note and
+        stop automatic re-prioritization; the prioritizer calls this with ``lock=False``.
+        Returns True if the severity changed."""
+        if severity not in SEVERITY_LEVELS:
+            raise ValueError(f"severity must be one of {SEVERITY_LEVELS}")
+        alert = self.alert(alert_id)
+        if alert is None:
+            raise KeyError(f"unknown alert {alert_id}")
+        note = note.strip()
+        if lock and not note:
+            raise ValueError("a note is required to change an alert's severity")
+        if not lock and alert["severity_locked"]:
+            return False
+        if severity == alert["severity"] and (not lock or alert["severity_locked"]):
+            if not lock and note != alert["severity_reason"]:
+                self.conn.execute(
+                    "UPDATE alerts SET severity_reason = ? WHERE id = ?", (note, alert["ref"])
+                )
+            return False
+        now = iso_utc(datetime.now(UTC))
+        self._alert_history(alert["ref"], now, actor, "severity", alert["severity"], severity, note)
+        self.conn.execute(
+            """UPDATE alerts SET severity = ?, severity_reason = ?, severity_locked = ?,
+               updated_at = ? WHERE id = ?""",
+            (severity, note, int(lock or alert["severity_locked"]), now, alert["ref"]),
+        )
+        if lock:
+            self.commit()
+        return True
+
+    def alert_history(self, alert_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT h.ts, h.actor, h.field, h.old_value, h.new_value, h.note
+               FROM alert_history h JOIN alerts a ON a.id = h.alert_ref
+               WHERE a.alert_id = ? ORDER BY h.id""",
+            (alert_id,),
+        )
+        return [dict(r) for r in rows]
+
+    def alert_counts(self) -> dict[str, dict[str, int]]:
+        q = self.conn.execute
+        return {
+            "by_severity": dict(q("SELECT severity, COUNT(*) FROM alerts GROUP BY 1")),
+            "by_status": dict(q("SELECT status, COUNT(*) FROM alerts GROUP BY 1")),
+        }
+
+    def _alert_history(self, ref, ts, actor, field, old, new, note) -> None:
+        self.conn.execute(
+            """INSERT INTO alert_history (alert_ref, ts, actor, field, old_value, new_value, note)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (ref, ts, actor, field, old, new, note),
+        )
+
+    def _event_ref(self, event_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT id FROM security_events WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"unknown event {event_id}")
+        return row[0]
 
     def close(self) -> None:
         if not self.read_only:
@@ -340,6 +544,12 @@ class EventStore:
                 continue
             if key not in allowed:
                 raise ValueError(f"unknown filter {key!r}")
+            if key.endswith("_ids"):
+                values = list(value)
+                column = key[:-1]  # alert_ids -> alert_id
+                clauses.append(f"{column} IN ({', '.join('?' for _ in values)})" if values else "0")
+                params.extend(values)
+                continue
             clauses.append(allowed[key])
             params.append(value)
         sql = f"SELECT * FROM {source}"

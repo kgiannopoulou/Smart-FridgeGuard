@@ -8,7 +8,8 @@
 #   name          shown in alerts
 #   type          rule type (see docs/detection-engine.md for the list)
 #   enabled       false switches the rule off
-#   severity      LOW | MEDIUM | HIGH | CRITICAL
+#   severity      INFO | LOW | MEDIUM | HIGH | CRITICAL  (base severity; the final
+#                 classification is done by config/prioritization.yaml)
 #   implements    requirement IDs from requirements.md (traceability)
 #   attack        MITRE ATT&CK technique IDs (ICS unless marked Enterprise)
 #   params        type-specific settings
@@ -22,7 +23,7 @@ rules:
     name: Unauthorized setpoint change
     type: unauthorized_change
     enabled: true
-    severity: CRITICAL
+    severity: HIGH           # CRITICAL when followed by a temperature excursion (prioritization)
     implements: [DR-4, DR-5]
     attack: [T0836, T0859]
     params:
@@ -82,8 +83,22 @@ rules:
     name: Unauthorized user configuration change
     type: unauthorized_change
     enabled: true
-    severity: CRITICAL
+    severity: HIGH           # CRITICAL when followed by a temperature excursion (prioritization)
     implements: [DR-4, DR-10]
     attack: [T0836, T0838, T0859]
     params:
       parameters: [alarm_low_c, alarm_high_c, defrost_interval_h, firmware_version]
+
+  DET-007:
+    name: Planned maintenance activity
+    type: maintenance_activity
+    enabled: true
+    severity: INFO           # audit trail of normal work, not a detection
+    implements: [FR-6]
+    attack: []
+    params:
+      roles: [technician, admin]
+      maintenance_window:              # keep in sync with DET-004
+        days: [mon, tue, wed, thu, fri]
+        start: "06:00"
+        end: "09:00"

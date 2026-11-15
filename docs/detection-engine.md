@@ -4,7 +4,15 @@
 **Step:** 8 – Develop the detection engine
 **Status:** Done (2026-11-14)
 **Related:** [requirements.md](../requirements.md) FR-5/FR-6 · [threat-model.md](../threat-model.md) ·
-[event-database.md](event-database.md)
+[event-database.md](event-database.md) · [alert-management.md](alert-management.md)
+
+> **Updated in Step 10:** the severities below are *base* severities. The final severity
+> (INFO…CRITICAL) is set by the prioritizer, and DET-001/DET-006 moved from Critical to
+> High (Critical is now reserved for a change followed by a temperature excursion). DET-007
+> (informational maintenance record) was added. Alert statuses are now `new`,
+> `under_investigation`, `confirmed`, `false_positive` and `resolved`. See
+> [alert-management.md](alert-management.md). The week results in section 8 are the
+> Step 8 run.
 
 ---
 
@@ -25,12 +33,13 @@ python -m fridgeguard detect                          # re-run all rules over st
 
 | Rule | Detection logic | Severity | Rule type | Implements |
 |------|-----------------|----------|-----------|------------|
-| **DET-001** | Unauthorized setpoint change: a `SETPOINT_CHANGE` whose role lacks the permission, or whose authorization information is missing | Critical | `unauthorized_change` | DR-4, DR-5 |
+| **DET-001** | Unauthorized setpoint change: a `SETPOINT_CHANGE` whose role lacks the permission, or whose authorization information is missing | High (Critical before Step 10) | `unauthorized_change` | DR-4, DR-5 |
 | **DET-002** | Multiple failed logins: **5 or more `LOGIN_FAILURE`s from the same source IP within 5 minutes** | High | `failed_logins` | DR-1 |
 | **DET-003** | Temperature outside configured limits: readings outside the device's expected range for **15 minutes or longer** | High | `temperature_limits` | DR-6 |
 | **DET-004** | Access outside maintenance hours: a technician or admin logs in or changes a setting outside Mon–Fri 06:00–09:00 (site time) | Medium | `maintenance_hours` | DR-2 |
 | **DET-005** | Missing device heartbeat: no reading from a device for **3 × 60 s** | High | `missing_heartbeat` | DR-8 |
-| **DET-006** | Unauthorized user configuration change: same as DET-001 for alarm thresholds, defrost interval and firmware | Critical | `unauthorized_change` | DR-4, DR-10 |
+| **DET-006** | Unauthorized user configuration change: same as DET-001 for alarm thresholds, defrost interval and firmware | High (Critical before Step 10) | `unauthorized_change` | DR-4, DR-10 |
+| **DET-007** | Planned maintenance activity (Step 10): an applied, permitted change by a technician or admin inside the maintenance window. Audit trail only, not a detection | Info | `maintenance_activity` | FR-6 |
 
 ATT&CK for ICS techniques attached to the alerts: DET-001 T0836, T0859 · DET-002 T1110
 (Enterprise) · DET-003 T0879, T0831 · DET-004 T0859 · DET-005 T0804, T0829 · DET-006 T0836,

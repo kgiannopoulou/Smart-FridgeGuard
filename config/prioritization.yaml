@@ -1,0 +1,47 @@
+# Alert prioritization (Phase 2, Step 10).
+#
+# Detection rules give every alert a base severity (config/detection.yaml). The
+# prioritizer then classifies each alert using what else is known about it, so that
+# alerts that deserve a fast response come first in the triage queue:
+#
+#   CRITICAL       unauthorized configuration change followed by temperature manipulation
+#   HIGH           repeated failed logins, serious temperature deviation, applied
+#                  unauthorized change, missing heartbeat
+#   MEDIUM         unusual access outside maintenance hours, refused change attempts
+#   LOW            minor abnormal behaviour that only needs observation
+#   INFO           normal maintenance activity
+#
+# The classification is re-run after every detection run, so it can go up (the
+# temperature keeps rising) or down. An analyst can override it
+# (fridgeguard alerts severity ...); overridden alerts are never re-classified.
+
+# An unauthorized change that the device applied, followed on the same device by a
+# temperature excursion: both alerts become CRITICAL.
+change_then_temperature:
+  enabled: true
+  change_rules: [DET-001, DET-006]
+  temperature_rules: [DET-003]
+  window_s: 7200               # excursion starts at most 2 h after the change
+  severity: CRITICAL
+
+# An unauthorized change the device refused (denied / rejected): nothing was changed,
+# but someone tried. Lower than an applied change.
+refused_change:
+  rules: [DET-001, DET-006]
+  severity: MEDIUM
+
+# Temperature excursions are graded by how far the reading went beyond the device's
+# expected range (worst reading until the device was back in range, at most 24 h).
+temperature_deviation:
+  rules: [DET-003]
+  serious_c: 2.0               # >= 2 °C beyond the range -> serious
+  serious_severity: HIGH
+  minor_severity: LOW          # less than that -> observe
+
+# Devices where the same problem matters more (vaccines). Alerts from these rules on
+# these devices are raised one level, but not above max_severity: CRITICAL stays reserved
+# for the change-then-temperature sequence. INFO is never raised.
+critical_devices:
+  devices: [FRIDGE-003]
+  rules: [DET-003, DET-005]
+  max_severity: HIGH

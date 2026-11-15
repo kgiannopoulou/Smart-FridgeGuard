@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fridgeguard.timeutil import parse_utc
 
-SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+SEVERITIES = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
 TELEMETRY = "telemetry"
 SECURITY = "security"
 

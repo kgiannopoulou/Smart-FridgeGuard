@@ -10,6 +10,18 @@ from pathlib import Path
 from fridgeguard import __version__
 
 DEFAULT_DB = Path("data/fridgeguard.db")
+SEVERITY_CHOICES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
+STATUS_CHOICES = ["new", "under_investigation", "confirmed", "false_positive", "resolved"]
+
+
+def _default_analyst() -> str:
+    import getpass
+    import os
+
+    try:
+        return os.environ.get("FRIDGEGUARD_ANALYST") or getpass.getuser()
+    except OSError:
+        return "analyst"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,17 +95,49 @@ def build_parser() -> argparse.ArgumentParser:
     det.add_argument("--config-dir", type=Path, help="alternative config directory")
 
     # ---- alerts ----
-    al = sub.add_parser("alerts", help="list and inspect security alerts")
+    al = sub.add_parser("alerts", help="list, prioritize and manage security alerts")
     al.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
     al_sub = al.add_subparsers(dest="alerts_command", required=True)
     al_list = al_sub.add_parser("list", help="list alerts (oldest first)")
     al_list.add_argument("--rule", dest="rule_id", help="e.g. DET-002")
-    al_list.add_argument("--severity", choices=["LOW", "MEDIUM", "HIGH", "CRITICAL"])
+    al_list.add_argument("--severity", choices=SEVERITY_CHOICES)
+    al_list.add_argument("--min-severity", choices=SEVERITY_CHOICES)
     al_list.add_argument("--device")
-    al_list.add_argument("--status", choices=["open", "acknowledged", "resolved", "false_positive"])
+    al_list.add_argument("--status", choices=STATUS_CHOICES)
+    al_list.add_argument("--assigned", dest="assigned_to", help="analyst name")
     al_list.add_argument("--limit", type=int, default=0, help="number of alerts (0 = all)")
-    al_show = al_sub.add_parser("show", help="one alert with its evidence")
+    al_queue = al_sub.add_parser(
+        "queue", help="triage queue: open alerts, most severe first, then oldest first"
+    )
+    al_queue.add_argument(
+        "--min-severity", choices=SEVERITY_CHOICES, default="LOW", help="default LOW (hides INFO)"
+    )
+    al_queue.add_argument("--device")
+    al_queue.add_argument("--assigned", dest="assigned_to", help="analyst name")
+    al_queue.add_argument("--limit", type=int, default=0, help="number of alerts (0 = all)")
+    al_show = al_sub.add_parser("show", help="one alert with its evidence and history")
     al_show.add_argument("alert_id", help="e.g. ALR-000001")
+    al_status = al_sub.add_parser(
+        "status",
+        help="move an alert through the workflow",
+        description="new -> under_investigation -> confirmed / false_positive / resolved. "
+        "A note is required for every step except starting an investigation.",
+    )
+    al_status.add_argument("alert_id")
+    al_status.add_argument("status", choices=STATUS_CHOICES)
+    al_status.add_argument("--note", default="", help="why (required except for investigating)")
+    al_status.add_argument(
+        "--analyst", default=None, help="default: $FRIDGEGUARD_ANALYST or the OS user"
+    )
+    al_sev = al_sub.add_parser(
+        "severity", help="override an alert's severity (stops automatic re-prioritization)"
+    )
+    al_sev.add_argument("alert_id")
+    al_sev.add_argument("severity", choices=SEVERITY_CHOICES)
+    al_sev.add_argument("--note", required=True, help="why the severity is changed")
+    al_sev.add_argument("--analyst", default=None)
+    al_sub.add_parser("prioritize", help="re-classify every alert (config/prioritization.yaml)")
+    al_sub.add_parser("stats", help="alert counts by severity and status")
     al_sub.add_parser("rules", help="show the configured detection rules")
     al.add_argument("--config-dir", type=Path, help="alternative config directory")
 
@@ -268,6 +312,15 @@ def run_detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_counts(store) -> None:
+    from fridgeguard.storage.store import ALERT_STATUSES, SEVERITY_LEVELS
+
+    counts = store.alert_counts()
+    sev, st = counts["by_severity"], counts["by_status"]
+    print("by severity: " + ", ".join(f"{k} {sev.get(k, 0)}" for k in reversed(SEVERITY_LEVELS)))
+    print("by status:   " + ", ".join(f"{k} {st.get(k, 0)}" for k in ALERT_STATUSES))
+
+
 def run_alerts(args: argparse.Namespace) -> int:
     import json
 
@@ -288,17 +341,34 @@ def run_alerts(args: argparse.Namespace) -> int:
     if not Path(args.db).exists():
         print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
         return 2
+    if args.alerts_command in ("status", "severity", "prioritize"):
+        return _manage_alert(args)
+    from fridgeguard.storage.store import SEVERITY_LEVELS
+
     store = EventStore(args.db, read_only=True)
     try:
         if args.alerts_command == "list":
+            min_rank = SEVERITY_LEVELS.index(args.min_severity) if args.min_severity else None
             rows = store.alerts(
                 limit=args.limit or None,
                 rule_id=args.rule_id,
                 severity=args.severity,
+                min_severity=min_rank,
                 device=args.device,
                 status=args.status,
+                assigned_to=args.assigned_to,
             )
             print(format_alert_table(rows))
+        elif args.alerts_command == "queue":
+            rows = store.alert_queue(
+                args.min_severity,
+                limit=args.limit or None,
+                device=args.device,
+                assigned_to=args.assigned_to,
+            )
+            print(format_alert_table(rows, queue=True))
+        elif args.alerts_command == "stats":
+            _print_counts(store)
         else:
             alert = store.alert(args.alert_id)
             if alert is None:
@@ -311,30 +381,77 @@ def run_alerts(args: argparse.Namespace) -> int:
             print(f"description: {alert['description']}")
             print(f"device:      {alert['device_id']}   subject: {alert['subject']}")
             print(f"first seen:  {alert['first_seen']}   last seen: {alert['last_seen']}")
-            print(f"status:      {alert['status']}")
+            locked = " (set by analyst)" if alert["severity_locked"] else ""
+            print(f"severity:    {alert['severity']}{locked}   base: {alert['base_severity']}")
+            print(f"why:         {alert['severity_reason'] or '-'}")
+            print(f"status:      {alert['status']}   assigned to: {alert['assigned_to'] or '-'}")
             print(f"ATT&CK:      {', '.join(json.loads(alert['attack_ids']))}")
             print(f"implements:  {', '.join(json.loads(alert['implements']))}")
             print(f"evidence ({alert['evidence_count']}):")
             for ev in store.alert_evidence(args.alert_id):
                 print(f"  {ev['record_id']:<11} {_fmt_ts(ev['ts'])}  {ev['note']}")
+            history = store.alert_history(args.alert_id)
+            print(f"history ({len(history)}):")
+            for h in history:
+                change = f"{h['field']} {h['old_value'] or '-'} -> {h['new_value']}"
+                print(f"  {_fmt_ts(h['ts'])}  {h['actor']:<12} {change:<40} {h['note']}")
     finally:
         store.close()
     return 0
 
 
-def format_alert_table(rows: list[dict]) -> str:
+def _manage_alert(args: argparse.Namespace) -> int:
+    from fridgeguard.detection import Prioritizer
+    from fridgeguard.storage import EventStore
+
+    store = EventStore(args.db)
+    try:
+        if args.alerts_command == "prioritize":
+            try:
+                summary = Prioritizer.from_config(store, args.config_dir).run()
+            except ValueError as exc:
+                print(f"error in prioritization config: {exc}", file=sys.stderr)
+                return 2
+            print(f"alerts:     {summary.alerts} classified, {len(summary.changed)} changed")
+            for alert_id, old, new in summary.changed:
+                print(f"  {alert_id}  {old} -> {new}")
+            _print_counts(store)
+            return 0
+        analyst = args.analyst or _default_analyst()
+        try:
+            if args.alerts_command == "status":
+                alert = store.set_alert_status(args.alert_id, args.status, analyst, args.note)
+                print(
+                    f"{alert['alert_id']}  {alert['severity']}  now {alert['status']}"
+                    f" (assigned to {alert['assigned_to'] or '-'})"
+                )
+            else:
+                store.set_alert_severity(args.alert_id, args.severity, analyst, args.note)
+                print(f"{args.alert_id}  severity {args.severity} (set by {analyst})")
+        except KeyError as exc:
+            print(f"error: {exc.args[0]}", file=sys.stderr)
+            return 2
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        store.close()
+    return 0
+
+
+def format_alert_table(rows: list[dict], queue: bool = False) -> str:
     header = (
         f"{'Alert ID':<11} {'First seen (UTC)':<16}  {'Severity':<8} {'Rule':<8} "
-        f"{'Device':<10}  {'Ev.':>3}  {'Status':<8} Title"
+        f"{'Device':<10}  {'Ev.':>3}  {'Status':<19} {'Assigned':<10} Title"
     )
-    lines = [header, "-" * 110]
+    lines = [header, "-" * 130]
     for r in rows:
         lines.append(
             f"{r['alert_id']:<11} {_fmt_ts(r['first_seen']):<16}  {r['severity']:<8} "
             f"{r['rule_id']:<8} {r['device_id'] or '-':<10}  {r['evidence_count']:>3}  "
-            f"{r['status']:<8} {r['title']}"
+            f"{r['status']:<19} {r['assigned_to'] or '-':<10} {r['title']}"
         )
-    lines.append(f"({len(rows)} alerts)")
+    lines.append(f"({len(rows)} {'open alerts in the queue' if queue else 'alerts'})")
     return "\n".join(lines)
 
 

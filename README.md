@@ -26,6 +26,8 @@ SOC dashboard supports alert triage and incident investigation.
 | | 6. Build the user and activity simulator | `fridgeguard/generator/`, [docs/simulation.md](docs/simulation.md) | Done |
 | 2 – Cybersecurity detection engine | 7. Build the event logging system | `fridgeguard/storage/`, [docs/event-database.md](docs/event-database.md) | Done |
 | | 8. Develop the detection engine | [`fridgeguard/detection/detector.py`](fridgeguard/detection/detector.py), rules in `fridgeguard/detection/rules/`, [`config/detection.yaml`](config/detection.yaml), [docs/detection-engine.md](docs/detection-engine.md) | Done |
+| | 9. Develop event correlation | Incident correlation engine | In progress |
+| | 10. Implement alert prioritization | [`fridgeguard/detection/prioritizer.py`](fridgeguard/detection/prioritizer.py), [`config/prioritization.yaml`](config/prioritization.yaml), alert workflow, [docs/alert-management.md](docs/alert-management.md) | Done |
 
 ## Quick start
 
@@ -63,19 +65,45 @@ python -m fridgeguard alerts show ALR-000001
 python -m fridgeguard detect                                   # re-run rules over stored events
 ```
 
-| Rule | Detects | Severity |
-|------|---------|----------|
-| DET-001 | Unauthorized setpoint change | Critical |
+| Rule | Detects | Base severity |
+|------|---------|---------------|
+| DET-001 | Unauthorized setpoint change | High |
 | DET-002 | Multiple failed logins (5+ from one source in 5 min) | High |
 | DET-003 | Temperature outside configured limits (15+ min) | High |
 | DET-004 | Access outside maintenance hours | Medium |
 | DET-005 | Missing device heartbeat | High |
-| DET-006 | Unauthorized user configuration change | Critical |
+| DET-006 | Unauthorized user configuration change | High |
+| DET-007 | Planned maintenance activity (audit trail) | Info |
 
 Thresholds, windows and severities are set in `config/detection.yaml`, not in code. Over a
 simulated week the rules caught every injected unauthorized change, off-hours session,
 compressor failure and outage, with no false positives. See
 [docs/detection-engine.md](docs/detection-engine.md).
+
+## Prioritize and manage alerts
+
+```powershell
+python -m fridgeguard alerts queue                                  # open alerts, most severe first
+python -m fridgeguard alerts status ALR-000008 under_investigation   # assigns it to you
+python -m fridgeguard alerts status ALR-000008 false_positive --note "Planned call-out, confirmed by phone"
+python -m fridgeguard alerts severity ALR-000002 CRITICAL --note "Same IP seen at another store"
+python -m fridgeguard alerts stats
+```
+
+| Severity | Example |
+|----------|---------|
+| Critical | Unauthorized configuration change followed by temperature manipulation |
+| High | Repeated failed logins or serious temperature deviation (≥ 2 °C beyond the range) |
+| Medium | Unusual access outside maintenance hours; refused change attempts |
+| Low | Minor abnormal behaviour requiring observation (small temperature deviation) |
+| Info | Normal maintenance activity |
+
+The prioritizer classifies each alert from its rule's base severity and the context (was
+the change applied? how far did the temperature go? critical device? did the temperature
+react to an unauthorized change?), stores the reason, and re-classifies as the situation
+develops. Alerts move through **new → under investigation → confirmed / false positive /
+resolved**. Every step is assigned, needs a note where it matters, and is kept in an
+append-only history. See [docs/alert-management.md](docs/alert-management.md).
 
 ## Query the event database
 
@@ -97,5 +125,6 @@ append-only tables. See [docs/event-database.md](docs/event-database.md).
 - [Architecture](docs/architecture.md): components, data flow, event schema, SQLite schema, detection engine design, configuration, tech stack, security design
 - [Development setup](docs/development-setup.md): tools, virtual environment, VS Code, project folders, everyday commands
 - [Simulation](docs/simulation.md): refrigerator thermal model, reading format, users and roles, authentication, authorization, activity events
-- [Detection engine](docs/detection-engine.md): rules DET-001…DET-006, configuration, alert grouping and evidence, results against ground truth
+- [Detection engine](docs/detection-engine.md): rules DET-001…DET-007, configuration, alert grouping and evidence, results against ground truth
+- [Alert management](docs/alert-management.md): severity classification INFO…CRITICAL, prioritization steps, alert statuses and workflow, triage queue
 - [Event database](docs/event-database.md): telemetry vs. security audit events, event fields and types, status, integrity, CLI and SQL access

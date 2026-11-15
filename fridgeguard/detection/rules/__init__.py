@@ -2,6 +2,7 @@
 
 from fridgeguard.detection.rules import (  # noqa: F401  (imports register the rule types)
     failed_logins,
+    maintenance_activity,
     maintenance_hours,
     missing_heartbeat,
     temperature_limits,

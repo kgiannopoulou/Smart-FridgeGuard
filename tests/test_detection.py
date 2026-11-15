@@ -164,12 +164,13 @@ def by_rule(alerts, rule_id):
 def test_default_rules_and_severities():
     rules, dedup = load_rules()
     assert {r.rule_id: (r.name, r.severity) for r in rules} == {
-        "DET-001": ("Unauthorized setpoint change", "CRITICAL"),
+        "DET-001": ("Unauthorized setpoint change", "HIGH"),
         "DET-002": ("Multiple failed logins", "HIGH"),
         "DET-003": ("Temperature outside configured limits", "HIGH"),
         "DET-004": ("Access outside maintenance hours", "MEDIUM"),
         "DET-005": ("Missing device heartbeat", "HIGH"),
-        "DET-006": ("Unauthorized user configuration change", "CRITICAL"),
+        "DET-006": ("Unauthorized user configuration change", "HIGH"),
+        "DET-007": ("Planned maintenance activity", "INFO"),
     }
     assert dedup == 900
     det2 = next(r for r in rules if r.rule_id == "DET-002")
@@ -246,7 +247,7 @@ def test_new_rule_from_config_only(store, feed, config_copy):
 def test_det001_unauthorized_setpoint_change(store, feed):
     event = feed.change(MON_0630, user="store_manager", role="manager", authorized=False)
     alerts = by_rule(detect(store)[1], "DET-001")
-    assert len(alerts) == 1 and alerts[0]["severity"] == "CRITICAL"
+    assert len(alerts) == 1 and alerts[0]["severity"] == "HIGH"  # applied, no impact yet
     assert "store_manager changed setpoint_c 4.0 °C -> 10.0 °C" in alerts[0]["title"]
     history = store.status_history("EVT-000001")
     assert history[-1]["status"] == "malicious" and history[-1]["set_by"] == "DET-001"
@@ -262,9 +263,10 @@ def test_det001_denied_attempt_is_suspicious_not_malicious(store, feed):
 
 
 def test_det001_authorized_technician_does_not_alert(store, feed):
-    feed.change(MON_0630)  # technician with change_setpoint
+    feed.change(MON_0630)  # technician with change_setpoint, inside the maintenance window
     summary, alerts = detect(store)
-    assert alerts == [] and summary.hits == 0
+    # only the informational maintenance record (DET-007), no detection
+    assert [(a["rule_id"], a["severity"]) for a in alerts] == [("DET-007", "INFO")]
     assert store.security_events()[0]["status"] == "normal"
 
 
@@ -287,7 +289,7 @@ def test_det006_other_configuration_parameters(store, feed):
     alerts = detect(store)[1]
     assert by_rule(alerts, "DET-001") == []
     assert {a["device_id"] for a in by_rule(alerts, "DET-006")} == {"FRIDGE-001", "FRIDGE-002"}
-    assert all(a["severity"] == "CRITICAL" for a in alerts)
+    assert all(a["severity"] == "HIGH" for a in alerts)
 
 
 # ---- DET-002 multiple failed logins ------------------------------------------------------
@@ -364,7 +366,7 @@ def test_det004_off_hours_session_is_one_alert(store, feed):
 def test_det004_inside_window_is_fine(store, feed):
     feed.login(MON_0630)
     feed.change(MON_0630 + timedelta(minutes=2))
-    assert detect(store)[1] == []
+    assert [a["rule_id"] for a in detect(store)[1]] == ["DET-007"]  # INFO record only
 
 
 def test_det004_ignores_roles_without_restrictions(store, feed):

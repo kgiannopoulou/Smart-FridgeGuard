@@ -13,6 +13,9 @@ and turns rule hits into security alerts in the event database.
   (``suspicious`` or ``malicious``) appended to their status history.
 * **Idempotent:** alert keys are deterministic, so running detection again over the same
   data finds the existing alerts instead of creating duplicates.
+* **Prioritized:** with a :class:`~fridgeguard.detection.prioritizer.Prioritizer`
+  attached (the default from config), alerts are classified INFO..CRITICAL as they are
+  raised and again when detection finishes (Step 10).
 * **Live or batch:** :meth:`Detector.process` handles one record at a time (live
   simulation); :meth:`Detector.run` scans everything already stored.
 """
@@ -28,6 +31,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fridgeguard.config import load_yaml
+from fridgeguard.detection.prioritizer import Prioritizer
 from fridgeguard.detection.rules import RULE_TYPES, Record, Rule, RuleHit
 from fridgeguard.detection.rules.base import DetectionContext
 from fridgeguard.models import iso_utc
@@ -100,6 +104,7 @@ class Detector:
         rules: list[Rule],
         dedup_window_s: float = 900,
         on_alert: Callable[[Alert], None] | None = None,
+        prioritizer: Prioritizer | None = None,
     ):
         if len({r.rule_id for r in rules}) != len(rules):
             raise ValueError("rule IDs must be unique")
@@ -107,6 +112,7 @@ class Detector:
         self.rules = rules
         self.dedup_window = timedelta(seconds=dedup_window_s)
         self.on_alert = on_alert
+        self.prioritizer = prioritizer
         self.now: datetime | None = None
         self.summary = DetectionSummary()
         # (rule_id, subject) -> (alert_id, time of the latest hit)
@@ -118,9 +124,11 @@ class Detector:
         store: EventStore,
         config_dir: Path | None = None,
         on_alert: Callable[[Alert], None] | None = None,
+        prioritize: bool = True,
     ) -> Detector:
         rules, dedup = load_rules(config_dir)
-        return cls(store, rules, dedup, on_alert)
+        prioritizer = Prioritizer.from_config(store, config_dir) if prioritize else None
+        return cls(store, rules, dedup, on_alert, prioritizer)
 
     # ---- processing ------------------------------------------------------------------
     def process(self, record: Record) -> list[Alert]:
@@ -138,6 +146,8 @@ class Detector:
     def finish(self, now: datetime | None = None) -> list[Alert]:
         """Run time-based checks up to ``now`` (default: the newest record seen)."""
         alerts = self._advance(now) if now else []
+        if self.prioritizer:
+            self.prioritizer.run()  # temperatures may have kept rising since the last hit
         self.store.commit()
         return alerts
 
@@ -200,11 +210,21 @@ class Detector:
                     iso_utc(when),
                 )
 
+        severity = rule.severity
+        if self.prioritizer:
+            # classify this alert and the other alerts on the same device (a temperature
+            # alert can make an earlier change alert CRITICAL)
+            related = [alert_id]
+            if hit.device_id:
+                related += [a["alert_id"] for a in self.store.alerts(device=hit.device_id)]
+            self.prioritizer.run(related)
+            severity = self.store.alert(alert_id)["severity"]
+
         alert = Alert(
             alert_id,
             rule.rule_id,
             rule.name,
-            rule.severity,
+            severity,
             hit.device_id,
             hit.subject,
             hit.title,
