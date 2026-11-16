@@ -28,7 +28,7 @@ from fridgeguard.models import Event, iso_utc
 from fridgeguard.simulator.fleet import Fleet
 from fridgeguard.storage.normalize import STATUSES, ValidationError, event_from_json, normalize
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 SECURITY_FILTERS = {
     "device": "device = ?",
@@ -64,6 +64,17 @@ ALERT_TRANSITIONS: dict[str, dict[str, bool]] = {
 # Status names used before Step 10, mapped when an older database is opened.
 LEGACY_ALERT_STATUS = {"open": "new", "acknowledged": "under_investigation"}
 
+INCIDENT_FILTERS = {
+    "pattern_id": "pattern_id = ?",
+    "severity": "severity = ?",
+    "min_severity": "severity_rank >= ?",
+    "status": "status = ?",
+    "verdict": "verdict = ?",
+    "since": "first_seen >= ?",
+    "until": "first_seen < ?",
+}
+INCIDENT_STATUSES = ("open", "investigating", "closed")
+INCIDENT_VERDICTS = ("unverified", "true_positive", "benign", "false_positive", "undetermined")
 TELEMETRY_FILTERS = {
     "device": "device_id = ?",
     "device_status": "device_status = ?",
@@ -80,6 +91,20 @@ class IngestResult:
     error: str | None = None
 
 
+def _needs_upgrade(path: Path) -> bool:
+    """True if an existing database was created by an older schema version."""
+    if not path.exists():
+        return False
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        row = conn.execute("SELECT value FROM schema_info WHERE key = 'version'").fetchone()
+    except sqlite3.OperationalError:
+        return True
+    finally:
+        conn.close()
+    return row is None or row[0] != SCHEMA_VERSION
+
+
 def _load_schema() -> str:
     return resources.files("fridgeguard.storage").joinpath("schema.sql").read_text("utf-8")
 
@@ -88,6 +113,8 @@ class EventStore:
     def __init__(self, path: Path | str, *, read_only: bool = False):
         self.path = Path(path) if str(path) != ":memory:" else path
         self.read_only = read_only
+        if read_only and _needs_upgrade(Path(path)):
+            EventStore(path).close()  # older schema: upgrade once, then reopen read-only
         if read_only:
             uri = f"file:{Path(path).as_posix()}?mode=ro"
             self.conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
@@ -308,6 +335,188 @@ class EventStore:
         )
         return [dict(r) for r in rows]
 
+    # ---- correlation support (Step 9) --------------------------------------------------
+    _SEC_SELECT = """SELECT e.*, COALESCE(s.status, 'normal') AS status
+                     FROM security_events e LEFT JOIN v_event_status s ON s.event_ref = e.id"""
+
+    def _by_ids(self, sql: str, key: str, ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        wanted = sorted(set(ids))
+        found: dict[str, dict[str, Any]] = {}
+        for start in range(0, len(wanted), 500):
+            part = wanted[start : start + 500]
+            marks = ", ".join("?" for _ in part)
+            for r in self.conn.execute(sql.format(marks=marks), part):
+                found[r[key]] = dict(r)
+        return found
+
+    def security_rows_with_status(self, event_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        """Security events by event ID, with their current status."""
+        ids = [i for i in event_ids if i.startswith("EVT-")]
+        return self._by_ids(self._SEC_SELECT + " WHERE e.event_id IN ({marks})", "event_id", ids)
+
+    def telemetry_rows(self, reading_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+        sql = "SELECT * FROM telemetry WHERE reading_id IN ({marks})"
+        return self._by_ids(sql, "reading_id", reading_ids)
+
+    def logins_from(self, source_ip: str, since: str, until: str) -> list[dict[str, Any]]:
+        """Successful logins from one source IP in a time range (inclusive)."""
+        rows = self.conn.execute(
+            self._SEC_SELECT
+            + """ WHERE e.source_ip = ? AND e.event_type = 'LOGIN_SUCCESS'
+                  AND e.ts_device >= ? AND e.ts_device <= ? ORDER BY e.ts_device, e.id""",
+            (source_ip, since, until),
+        )
+        return [dict(r) for r in rows]
+
+    def session_events(self, session_id: str) -> list[dict[str, Any]]:
+        """Every event of one login session: login, changes, logout."""
+        rows = self.conn.execute(
+            self._SEC_SELECT + " WHERE e.session_id = ? ORDER BY e.ts_device, e.id",
+            (session_id,),
+        )
+        return [dict(r) for r in rows]
+
+    def applied_changes(self, device_id: str, since: str, until: str) -> list[dict[str, Any]]:
+        """Configuration changes applied on a device in a time range (inclusive)."""
+        rows = self.conn.execute(
+            self._SEC_SELECT
+            + """ WHERE e.device_id = ? AND e.category = 'configuration'
+                  AND e.result = 'applied' AND e.ts_device >= ? AND e.ts_device <= ?
+                  ORDER BY e.ts_device, e.id""",
+            (device_id, since, until),
+        )
+        return [dict(r) for r in rows]
+
+    def readings_between(self, device_id: str, since: str, until: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT * FROM telemetry WHERE device_id = ? AND ts_device >= ? AND ts_device <= ?
+               ORDER BY ts_device, id""",
+            (device_id, since, until),
+        )
+        return [dict(r) for r in rows]
+
+    def reading_before(self, device_id: str, ts: str) -> dict[str, Any] | None:
+        """The latest reading of a device at or before ``ts``."""
+        row = self.conn.execute(
+            """SELECT * FROM telemetry WHERE device_id = ? AND ts_device <= ?
+               ORDER BY ts_device DESC, id DESC LIMIT 1""",
+            (device_id, ts),
+        ).fetchone()
+        return dict(row) if row else None
+
+    # ---- incidents ---------------------------------------------------------------------
+    def save_incident(self, incident: dict[str, Any]) -> tuple[str, bool]:
+        """Create an incident, or refresh the derived summary of an existing one.
+
+        ``incident`` holds column values; ``incident_key`` identifies the incident.
+        Returns ``(incident_id, created)``.
+        """
+        row = self.conn.execute(
+            "SELECT id, incident_id FROM incidents WHERE incident_key = ?",
+            (incident["incident_key"],),
+        ).fetchone()
+        if row:
+            fields = {k: v for k, v in incident.items() if k not in ("incident_key", "created_at")}
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            self.conn.execute(
+                f"UPDATE incidents SET {sets} WHERE id = ?", [*fields.values(), row["id"]]
+            )
+            return row["incident_id"], False
+        day = incident["first_seen"][:10].replace("-", "")
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM incidents WHERE incident_id LIKE ?", (f"INC-{day}-%",)
+        ).fetchone()[0]
+        incident_id = f"INC-{day}-{count + 1:03d}"
+        values = {"incident_id": incident_id, **incident}
+        columns = ", ".join(values)
+        marks = ", ".join("?" for _ in values)
+        self.conn.execute(
+            f"INSERT INTO incidents ({columns}) VALUES ({marks})", list(values.values())
+        )
+        return incident_id, True
+
+    def add_incident_member(
+        self, incident_id: str, record_id: str, kind: str, ts: str, note: str
+    ) -> None:
+        self.conn.execute(
+            """INSERT OR IGNORE INTO incident_members (incident_ref, record_id, kind, ts, note)
+               SELECT id, ?, ?, ?, ? FROM incidents WHERE incident_id = ?""",
+            (record_id, kind, ts, note, incident_id),
+        )
+
+    def incidents_containing(self, record_ids: Iterable[str]) -> set[str]:
+        """Active (not merged) incidents that already contain any of these records."""
+        sql = """SELECT DISTINCT i.incident_id AS incident_id FROM incident_members m
+                 JOIN incidents i ON i.id = m.incident_ref
+                 WHERE i.merged_into IS NULL AND m.record_id IN ({marks})"""
+        return set(self._by_ids(sql, "incident_id", record_ids))
+
+    def incident_key(self, incident_id: str) -> str:
+        return self.conn.execute(
+            "SELECT incident_key FROM incidents WHERE incident_id = ?", (incident_id,)
+        ).fetchone()[0]
+
+    def mark_incident_merged(self, incident_id: str, into: str, ts: str) -> None:
+        self.conn.execute(
+            "UPDATE incidents SET merged_into = ?, updated_at = ? WHERE incident_id = ?",
+            (into, ts, incident_id),
+        )
+
+    def incidents(
+        self,
+        limit: int | None = None,
+        newest_first: bool = False,
+        include_merged: bool = False,
+        **filters,
+    ):
+        rows = self._query(
+            "v_incidents", "first_seen, ref", INCIDENT_FILTERS, filters, None, newest_first
+        )
+        if not include_merged:
+            rows = [r for r in rows if r["merged_into"] is None]
+        return rows[:limit] if limit else rows
+
+    def incident(self, incident_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v_incidents WHERE incident_id = ?", (incident_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def incident_members(self, incident_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT m.record_id, m.kind, m.ts, m.note FROM incident_members m
+               JOIN incidents i ON i.id = m.incident_ref
+               WHERE i.incident_id = ? ORDER BY m.ts, m.kind = 'alert', m.record_id""",
+            (incident_id,),
+        )
+        return [dict(r) for r in rows]
+
+    def add_incident_review(
+        self, incident_id: str, analyst: str, status: str, verdict: str, note: str
+    ) -> None:
+        """Append an analyst review (status + verdict) to an incident."""
+        if status not in INCIDENT_STATUSES:
+            raise ValueError(f"status must be one of {INCIDENT_STATUSES}")
+        if verdict not in INCIDENT_VERDICTS:
+            raise ValueError(f"verdict must be one of {INCIDENT_VERDICTS}")
+        cur = self.conn.execute(
+            """INSERT INTO incident_reviews (incident_ref, ts, analyst, status, verdict, note)
+               SELECT id, ?, ?, ?, ?, ? FROM incidents WHERE incident_id = ?""",
+            (iso_utc(datetime.now(UTC)), analyst, status, verdict, note, incident_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"unknown incident {incident_id}")
+        self.commit()
+
+    def incident_reviews(self, incident_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT r.ts, r.analyst, r.status, r.verdict, r.note FROM incident_reviews r
+               JOIN incidents i ON i.id = r.incident_ref
+               WHERE i.incident_id = ? ORDER BY r.id""",
+            (incident_id,),
+        )
+        return [dict(r) for r in rows]
+
     # ---- prioritization support (Step 10) ----------------------------------------------
     def security_rows(self, event_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
         """Security events by event ID (``EVT-…``); other IDs are ignored."""
@@ -512,6 +721,9 @@ class EventStore:
             "security_events": q("SELECT COUNT(*) FROM security_events").fetchone()[0],
             "rejected": q("SELECT COUNT(*) FROM rejected_events").fetchone()[0],
             "alerts": q("SELECT COUNT(*) FROM alerts").fetchone()[0],
+            "incidents": q("SELECT COUNT(*) FROM incidents WHERE merged_into IS NULL").fetchone()[
+                0
+            ],
             "by_type": dict(
                 q("SELECT event_type, COUNT(*) FROM security_events GROUP BY 1 ORDER BY 2 DESC")
             ),

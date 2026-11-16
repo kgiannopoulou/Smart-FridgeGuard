@@ -1,32 +1,33 @@
-"""Streamlit SOC dashboard (placeholder for Phase 1, Step 4).
+"""Smart-FridgeGuard SOC dashboard (Phase 3, Step 11).
 
 Run with:  streamlit run dashboard/app.py
+Database:  data/fridgeguard.db, or set FRIDGEGUARD_DB to another file.
 """
 
-import pandas as pd
-import plotly.express as px
+from pathlib import Path
+
 import streamlit as st
 
-from fridgeguard import __version__
+PAGES = Path(__file__).parent / "views"  # not "pages/": that name triggers auto-discovery
 
-st.set_page_config(page_title="Smart-FridgeGuard SOC", layout="wide")
-st.title("Smart-FridgeGuard SOC dashboard")
-st.caption(f"v{__version__} · development environment check")
-
-st.info(
-    "The event generator and database are not built yet. "
-    "This page only confirms that Streamlit, pandas and Plotly work together."
+st.set_page_config(
+    page_title="Smart-FridgeGuard SOC",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# Static sample shape only; real data will come from SQLite (docs/architecture.md, 3.5).
-sample = pd.DataFrame(
+navigation = st.navigation(
     {
-        "minute": list(range(10)) * 3,
-        "device_id": ["FRIDGE-001"] * 10 + ["FRIDGE-002"] * 10 + ["FRIDGE-003"] * 10,
-        "temperature_c": [4.0] * 10 + [-18.0] * 10 + [5.0] * 10,
+        "Monitoring": [
+            st.Page(PAGES / "overview.py", title="Overview", icon="🛡️", default=True),
+            st.Page(PAGES / "temperature.py", title="Temperature monitoring", icon="🌡️"),
+            st.Page(PAGES / "security.py", title="Security monitoring", icon="🔐"),
+        ],
+        "Response": [
+            st.Page(PAGES / "alerts.py", title="Alert management", icon="🚨"),
+            st.Page(PAGES / "incidents.py", title="Incident investigation", icon="🔎"),
+        ],
     }
 )
-fig = px.line(
-    sample, x="minute", y="temperature_c", color="device_id", title="Chart rendering test"
-)
-st.plotly_chart(fig, width="stretch")
+navigation.run()

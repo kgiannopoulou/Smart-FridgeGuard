@@ -22,7 +22,7 @@ FOLDERS = [
     "fridgeguard/detection/rules",
     "fridgeguard/storage",
     "fridgeguard/investigation",
-    "dashboard/pages",
+    "dashboard/views",
     "templates",
     "tests",
     "data",

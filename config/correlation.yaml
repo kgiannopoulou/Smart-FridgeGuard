@@ -1,0 +1,214 @@
+# Event correlation (Phase 2, Step 9).
+#
+# The correlation engine connects alerts with the events around them and groups related
+# activity into one incident for investigation. It works in four stages:
+#
+#   1. evidence    every alert and the records it is based on
+#   2. pivots      follow-up lookups an analyst would do by hand (what did the attacking
+#                  source do next? what else happened in that session? did the
+#                  temperature react to the change?)
+#   3. linking     records that share a device, user, source IP or session and are close
+#                  in time are connected; each connected group is a candidate incident
+#   4. patterns    ordered attack sequences (below) name the incident, set its severity
+#                  and list what the analyst must verify
+#
+# Correlation shows that events are RELATED. It is not proof of compromise: every incident
+# starts as verdict "unverified" and an analyst decides (fridgeguard incidents review).
+
+# ---- 1. kill-chain stage of each alert rule and event type ----------------------------
+stages:
+  rules:
+    DET-001: tampering            # unauthorized setpoint change
+    DET-002: credential_access    # multiple failed logins
+    DET-003: impact               # temperature outside limits
+    DET-004: initial_access       # access outside maintenance hours
+    DET-005: impact               # missing heartbeat (loss of view)
+    DET-006: tampering            # unauthorized configuration change
+  events:
+    LOGIN_FAILURE: credential_access
+    LOGIN_SUCCESS: initial_access
+    LOGOUT: session
+    SETPOINT_CHANGE: tampering
+    ALARM_THRESHOLD_CHANGE: tampering
+    CONFIG_CHANGE: tampering
+    FIRMWARE_UPDATE: tampering
+
+# ---- 2. pivots ---------------------------------------------------------------------------
+pivots:
+  login_after_failures:           # successful logins from a source that just failed
+    rules: [DET-002]
+    window_s: 1800
+  session_activity:               # reconstruct each session (login, changes, logout)
+    enabled: true
+  changes_before_impact:          # what was changed on a device before it went out of range
+    rules: [DET-003]
+    lookback_s: 7200
+  temperature_after_change:       # independent sensor check after an applied setpoint change
+    window_s: 3600
+    rise_c: 1.5                   # first reading this far from the pre-change value, moving
+                                  # towards the new setpoint (normal cycling is ignored)
+
+# ---- 3. linking ------------------------------------------------------------------------
+# Two records are linked when they share one of these values and are no further apart
+# than the given number of seconds. A failed login's username is only a claim, so
+# "user" links only authenticated activity (successful logins, sessions, changes).
+link_on:
+  session_id: 14400
+  source_ip: 3600
+  user: 3600
+  device_id: 3600
+
+# ---- 4. patterns ---------------------------------------------------------------------------
+# Tried in order; the first pattern whose required steps all match names the incident.
+# Steps must occur in the listed order. Each step can require:
+#   match     field values (a list means any of them): kind (alert | security | telemetry),
+#             rule, stage, event_type, category, result, status, parameter
+#   same      share a value with an earlier step:  {source_ip: brute_force}
+#   within_s  at most this long after the previous matched step
+#   optional  the incident is created without it; matching it raises confidence
+# questions are what the analyst must verify; response is the recommended action list
+# (shown in the dashboard's incident investigation page).
+patterns:
+  COR-001:
+    name: Brute force, account takeover and configuration tampering
+    severity: CRITICAL
+    confidence_base: 50
+    implements: [DR-1, DR-9]
+    attack: [T1110, T0859, T0836, T0879]
+    steps:
+      - id: brute_force
+        label: Failed login attempts
+        match: { rule: DET-002 }
+      - id: login
+        label: Successful login from the same source
+        match: { event_type: LOGIN_SUCCESS }
+        same: { source_ip: brute_force }
+        within_s: 1800
+      - id: change
+        label: Configuration modified in that session
+        match: { category: configuration, result: applied }
+        same: { session_id: login }
+        within_s: 1800
+      - id: impact
+        label: Physical effect on the same device
+        match: { stage: impact }
+        same: { device_id: change }
+        within_s: 7200
+        optional: true
+    questions:
+      - Did the account owner log in at this time from this source IP? Ask them directly, not through the possibly compromised account.
+      - Is the source IP a known site, VPN or vendor address?
+      - Was there an approved work order for this configuration change?
+      - Do other devices show logins from the same source IP?
+      - Has the configuration been restored and the product temperature checked?
+    response:
+      - Contain - disable or lock the affected account and end its active sessions.
+      - Contain - block the source IP at the store firewall.
+      - Recover - restore the setpoint and other changed settings from the last approved configuration.
+      - Safety - check the product temperature history; quarantine stock that was out of range.
+      - Eradicate - reset the account's password and review who else knows it.
+      - Follow up - review whether remote login to the controller is needed at all.
+
+  COR-002:
+    name: Suspicious login followed by a configuration change
+    severity: HIGH
+    confidence_base: 40
+    implements: [DR-9]
+    attack: [T0859, T0836]
+    steps:
+      - id: login
+        label: Suspicious login
+        match: { event_type: LOGIN_SUCCESS, status: [suspicious, malicious] }
+      - id: change
+        label: Configuration modified in that session
+        match: { category: configuration, result: applied }
+        same: { session_id: login }
+        within_s: 600
+      - id: impact
+        label: Physical effect on the same device
+        match: { stage: impact }
+        same: { device_id: change }
+        within_s: 7200
+        optional: true
+    questions:
+      - Was this out-of-hours work planned or an emergency call-out?
+      - Does the account owner confirm the login and the change?
+      - Is the new value within the device's safe operating range?
+    response:
+      - Confirm with the account owner before acting; if unconfirmed, treat as COR-001.
+      - Recover - restore the previous value if the change was not approved.
+      - Follow up - require a work order for out-of-hours changes.
+
+  COR-003:
+    name: Brute force followed by a successful login
+    severity: HIGH
+    confidence_base: 40
+    implements: [DR-1, DR-9]
+    attack: [T1110, T0859]
+    steps:
+      - id: brute_force
+        label: Failed login attempts
+        match: { rule: DET-002 }
+      - id: login
+        label: Successful login from the same source
+        match: { event_type: LOGIN_SUCCESS }
+        same: { source_ip: brute_force }
+        within_s: 1800
+    questions:
+      - Did the account owner forget the password, or is someone else using the account?
+      - What did the session do after the login?
+      - Should the account's password be reset and the source IP blocked?
+    response:
+      - Contain - reset the password and end the session if the owner did not log in.
+      - Contain - block the source IP if it is not a known address.
+      - Investigate - review everything the session did after the login.
+
+  COR-004:
+    name: Configuration change followed by a temperature excursion
+    severity: HIGH
+    confidence_base: 30
+    implements: [DR-6, DR-9]
+    attack: [T0836, T0879]
+    steps:
+      - id: change
+        label: Configuration modified
+        match: { category: configuration, result: applied, parameter: [setpoint_c, alarm_low_c, alarm_high_c] }
+      - id: impact
+        label: Temperature outside limits on the same device
+        match: { rule: DET-003 }
+        same: { device_id: change }
+        within_s: 7200
+    questions:
+      - Could the change explain the excursion, or is it an equipment fault (compressor, door)?
+      - Who made the change, and was it approved?
+    response:
+      - Safety - check the product temperature and quarantine stock that was out of range.
+      - Recover - restore the previous setting if the change was not intended.
+      - Maintenance - inspect the unit if the change cannot explain the excursion.
+
+# Connected alerts that match no pattern still become an incident when they come from
+# at least this many different rules (set create: false to keep them as separate alerts).
+related_alerts:
+  create: true
+  min_rules: 2
+  severity: MEDIUM
+  confidence_base: 25
+  questions:
+    - Are these alerts really related, or do they only share a device by coincidence?
+  response:
+    - Review each alert on its own merits; close the incident if they are unrelated.
+
+# ---- confidence --------------------------------------------------------------------------
+# Confidence (0-100) says how strongly the evidence supports a real attack. It is not the
+# same as severity, which says how bad it would be. Points are added to the pattern's
+# confidence_base for each factor that applies to the matched records.
+confidence:
+  external_source: 15        # a source IP is not on the device's allow-list
+  allowed_source: -10        # every source IP is on the device's allow-list
+  outside_maintenance: 10    # privileged activity outside the maintenance window
+  inside_maintenance: -15    # all privileged activity inside the maintenance window
+  many_usernames: 10         # the failed logins tried 3 or more usernames
+  unknown_accounts: 5        # the failed logins included accounts that do not exist
+  physical_effect: 15        # telemetry shows the device reacting to the change
+  unsafe_value: 10           # a setpoint was set outside the device's safe range
+  levels: { medium: 40, high: 70 }   # below 40 low, 40-69 medium, 70+ high

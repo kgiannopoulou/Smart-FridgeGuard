@@ -26,8 +26,9 @@ SOC dashboard supports alert triage and incident investigation.
 | | 6. Build the user and activity simulator | `fridgeguard/generator/`, [docs/simulation.md](docs/simulation.md) | Done |
 | 2 – Cybersecurity detection engine | 7. Build the event logging system | `fridgeguard/storage/`, [docs/event-database.md](docs/event-database.md) | Done |
 | | 8. Develop the detection engine | [`fridgeguard/detection/detector.py`](fridgeguard/detection/detector.py), rules in `fridgeguard/detection/rules/`, [`config/detection.yaml`](config/detection.yaml), [docs/detection-engine.md](docs/detection-engine.md) | Done |
-| | 9. Develop event correlation | Incident correlation engine | In progress |
+| | 9. Develop event correlation | [`fridgeguard/detection/correlator.py`](fridgeguard/detection/correlator.py), [`config/correlation.yaml`](config/correlation.yaml), patterns COR-001..004, `correlate` / `incidents` CLI | Done |
 | | 10. Implement alert prioritization | [`fridgeguard/detection/prioritizer.py`](fridgeguard/detection/prioritizer.py), [`config/prioritization.yaml`](config/prioritization.yaml), alert workflow, [docs/alert-management.md](docs/alert-management.md) | Done |
+| 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`dashboard/`](dashboard/app.py) (Streamlit), data layer in [`fridgeguard/dashboard/`](fridgeguard/dashboard/) | Done |
 
 ## Quick start
 
@@ -104,6 +105,41 @@ react to an unauthorized change?), stores the reason, and re-classifies as the s
 develops. Alerts move through **new → under investigation → confirmed / false positive /
 resolved**. Every step is assigned, needs a note where it matters, and is kept in an
 append-only history. See [docs/alert-management.md](docs/alert-management.md).
+
+## Correlate alerts into incidents
+
+```powershell
+python -m fridgeguard correlate                      # also runs after detect / simulate
+python -m fridgeguard incidents list
+python -m fridgeguard incidents show INC-20261117-001
+python -m fridgeguard incidents review INC-20261117-001 closed --verdict true_positive --note "Owner did not log in"
+```
+
+The correlator links alerts with the events around them (same session, source IP, user or
+device, close in time), follows the pivots an analyst would make (logins after failed
+attempts, the rest of the session, changes before a temperature excursion, did the sensor
+react to a change?) and matches ordered attack patterns: COR-001 brute force -> takeover ->
+tampering (CRITICAL), COR-002 suspicious login -> change, COR-003 brute force -> login,
+COR-004 change -> excursion. Each incident has a confidence score with its reasons, a
+timeline, questions to verify and a recommended response. Incidents start "unverified";
+analyst reviews are append-only.
+
+## SOC dashboard
+
+```powershell
+streamlit run dashboard/app.py          # reads data/fridgeguard.db (or $env:FRIDGEGUARD_DB)
+```
+
+| Page | Shows |
+|------|-------|
+| Overview | fleet status, open alerts by severity, open incidents, latest alerts |
+| Temperature monitoring | history per fridge with expected range, abnormal readings and excursions, device comparison |
+| Security monitoring | failed and successful logins, configuration changes, suspicious IPs, unusual access times |
+| Alert management | severity, timestamps, affected fridge, associated user, status; triage and severity override (audited) |
+| Incident investigation | event timeline, related alerts, evidence collected, analyst findings, recommended response, Markdown report |
+
+![SOC dashboard overview](docs/images/dashboard-overview.png)
+![Incident investigation](docs/images/dashboard-incidents.png)
 
 ## Query the event database
 

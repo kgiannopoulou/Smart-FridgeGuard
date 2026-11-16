@@ -81,6 +81,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_security_event_id ON security_events(event
 CREATE INDEX IF NOT EXISTS idx_security_device_time ON security_events(device_id, ts_device);
 CREATE INDEX IF NOT EXISTS idx_security_type_time ON security_events(event_type, ts_device);
 CREATE INDEX IF NOT EXISTS idx_security_user_time ON security_events(user, ts_device);
+-- correlation pivots (Step 9): session reconstruction and "what did this source do next"
+CREATE INDEX IF NOT EXISTS idx_security_session ON security_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_security_source_time ON security_events(source_ip, ts_device);
 
 -- ---- status of security events ------------------------------------------------------
 CREATE TABLE IF NOT EXISTS event_status_history (
@@ -128,6 +131,7 @@ BEGIN SELECT RAISE(ABORT, 'rejected_events is append-only'); END;
 DROP VIEW IF EXISTS v_security_events;
 DROP VIEW IF EXISTS v_event_status;
 DROP VIEW IF EXISTS v_alerts;
+DROP VIEW IF EXISTS v_incidents;
 -- Latest status per security event.
 CREATE VIEW v_event_status AS
 SELECT h.event_ref, h.status, h.reason, h.set_by, h.ts
@@ -251,3 +255,90 @@ SELECT
 FROM alerts a
 LEFT JOIN alert_evidence ev ON ev.alert_ref = a.id
 GROUP BY a.id;
+
+-- ---- correlated incidents (Step 9) --------------------------------------------------
+-- An incident groups alerts and the events around them (same device, user, source IP or
+-- session, close in time) into one investigation. The summary columns are derived data:
+-- re-running correlation refreshes them. Membership and analyst reviews are append-only.
+-- An incident is a hypothesis for an analyst to validate, not a verdict.
+CREATE TABLE IF NOT EXISTS incidents (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_id        TEXT NOT NULL UNIQUE,     -- INC-20261117-001 (date of first activity)
+    incident_key       TEXT NOT NULL UNIQUE,     -- earliest record of the cluster
+    pattern_id         TEXT NOT NULL,            -- COR-001 ... or COR-000 (related alerts)
+    pattern_name       TEXT NOT NULL,
+    severity           TEXT NOT NULL CHECK (severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    confidence         INTEGER NOT NULL CHECK (confidence BETWEEN 0 AND 100),
+    confidence_level   TEXT NOT NULL CHECK (confidence_level IN ('low', 'medium', 'high')),
+    title              TEXT NOT NULL,
+    description        TEXT NOT NULL,
+    steps              TEXT NOT NULL,            -- JSON: matched sequence steps
+    confidence_factors TEXT NOT NULL,            -- JSON: [[points, reason], ...]
+    entities           TEXT NOT NULL,            -- JSON: devices, users, source IPs, sessions
+    links              TEXT NOT NULL,            -- JSON: how the records are connected
+    attack_ids         TEXT NOT NULL,            -- JSON array of ATT&CK technique IDs
+    implements         TEXT NOT NULL,            -- JSON array of requirement IDs
+    questions          TEXT NOT NULL,            -- JSON: what the analyst must verify
+    response           TEXT NOT NULL,            -- JSON: recommended response actions
+    first_seen         TEXT NOT NULL,
+    last_seen          TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    merged_into        TEXT                      -- set when a later run joined two incidents
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_first_seen ON incidents(first_seen);
+
+CREATE TABLE IF NOT EXISTS incident_members (
+    incident_ref INTEGER NOT NULL REFERENCES incidents(id),
+    record_id    TEXT NOT NULL,                  -- ALR-…, EVT-… or TEL-…
+    kind         TEXT NOT NULL CHECK (kind IN ('alert', 'security', 'telemetry')),
+    ts           TEXT NOT NULL,
+    note         TEXT NOT NULL,                  -- why the record belongs to the incident
+    PRIMARY KEY (incident_ref, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_incident_members_record ON incident_members(record_id);
+
+CREATE TABLE IF NOT EXISTS incident_reviews (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    incident_ref INTEGER NOT NULL REFERENCES incidents(id),
+    ts           TEXT NOT NULL,
+    analyst      TEXT NOT NULL,
+    status       TEXT NOT NULL CHECK (status IN ('open', 'investigating', 'closed')),
+    verdict      TEXT NOT NULL CHECK (verdict IN (
+                     'unverified', 'true_positive', 'benign', 'false_positive', 'undetermined')),
+    note         TEXT NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS incident_members_no_update BEFORE UPDATE ON incident_members
+BEGIN SELECT RAISE(ABORT, 'incident_members is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS incident_members_no_delete BEFORE DELETE ON incident_members
+BEGIN SELECT RAISE(ABORT, 'incident_members is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS incident_reviews_no_update BEFORE UPDATE ON incident_reviews
+BEGIN SELECT RAISE(ABORT, 'incident_reviews is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS incident_reviews_no_delete BEFORE DELETE ON incident_reviews
+BEGIN SELECT RAISE(ABORT, 'incident_reviews is append-only'); END;
+
+-- Incidents with the latest analyst review and member counts. Every incident starts as
+-- status 'open', verdict 'unverified' until an analyst reviews it.
+CREATE VIEW v_incidents AS
+SELECT
+    i.incident_id, i.pattern_id, i.pattern_name, i.severity, i.confidence,
+    i.confidence_level, i.title, i.description, i.steps, i.confidence_factors,
+    i.entities, i.links, i.attack_ids, i.implements, i.questions, i.response,
+    i.first_seen, i.last_seen, i.created_at, i.updated_at, i.merged_into,
+    COALESCE(r.status, 'open')        AS status,
+    CASE i.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2
+                    WHEN 'LOW' THEN 1 ELSE 0 END AS severity_rank,
+    COALESCE(r.verdict, 'unverified') AS verdict,
+    r.analyst                         AS reviewed_by,
+    (SELECT COUNT(*) FROM incident_members m
+      WHERE m.incident_ref = i.id AND m.kind = 'alert')  AS alert_count,
+    (SELECT COUNT(*) FROM incident_members m
+      WHERE m.incident_ref = i.id AND m.kind != 'alert') AS record_count,
+    i.id AS ref
+FROM incidents i
+LEFT JOIN (
+    SELECT ir.* FROM incident_reviews ir
+    JOIN (SELECT incident_ref, MAX(id) AS max_id FROM incident_reviews GROUP BY incident_ref) last
+      ON ir.id = last.max_id
+) r ON r.incident_ref = i.id;

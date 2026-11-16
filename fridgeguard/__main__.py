@@ -12,6 +12,8 @@ from fridgeguard import __version__
 DEFAULT_DB = Path("data/fridgeguard.db")
 SEVERITY_CHOICES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 STATUS_CHOICES = ["new", "under_investigation", "confirmed", "false_positive", "resolved"]
+INCIDENT_STATUS_CHOICES = ["open", "investigating", "closed"]
+VERDICT_CHOICES = ["unverified", "true_positive", "benign", "false_positive", "undetermined"]
 
 
 def _default_analyst() -> str:
@@ -93,6 +95,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     det.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
     det.add_argument("--config-dir", type=Path, help="alternative config directory")
+
+    # ---- correlate / incidents ----
+    cor = sub.add_parser(
+        "correlate",
+        help="group related alerts and events into incidents",
+        description="Run config/correlation.yaml over the stored alerts and events. Safe to "
+        "repeat: existing incidents are refreshed, not duplicated.",
+    )
+    cor.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
+    cor.add_argument("--config-dir", type=Path, help="alternative config directory")
+
+    inc = sub.add_parser("incidents", help="list, investigate and review incidents")
+    inc.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
+    inc_sub = inc.add_subparsers(dest="incidents_command", required=True)
+    inc_list = inc_sub.add_parser("list", help="incidents, most severe first")
+    inc_list.add_argument("--pattern", dest="pattern_id", help="e.g. COR-001")
+    inc_list.add_argument("--min-severity", choices=SEVERITY_CHOICES)
+    inc_list.add_argument("--status", choices=INCIDENT_STATUS_CHOICES)
+    inc_list.add_argument("--verdict", choices=VERDICT_CHOICES)
+    inc_show = inc_sub.add_parser("show", help="one incident: steps, confidence, timeline")
+    inc_show.add_argument("incident_id", help="e.g. INC-20261117-001")
+    inc_rev = inc_sub.add_parser(
+        "review",
+        help="record an analyst review (status and verdict)",
+        description="Append a review: status open / investigating / closed and a verdict. "
+        "A note is always required.",
+    )
+    inc_rev.add_argument("incident_id")
+    inc_rev.add_argument("status", choices=INCIDENT_STATUS_CHOICES)
+    inc_rev.add_argument(
+        "--verdict", choices=VERDICT_CHOICES, default=None, help="default: keep the current one"
+    )
+    inc_rev.add_argument("--note", required=True, help="findings behind the review")
+    inc_rev.add_argument("--analyst", default=None)
 
     # ---- alerts ----
     al = sub.add_parser("alerts", help="list, prioritize and manage security alerts")
@@ -246,8 +282,10 @@ def run_simulate(args: argparse.Namespace) -> int:
         ticks = sim.run(duration, realtime=args.realtime, speed=args.speed)
     except KeyboardInterrupt:
         ticks = None
+    correlation = None
     if detector:
         detector.finish(sim.now)
+        correlation = _correlate(db_sink.store, args.config_dir)
     if db_sink:
         db_sink.store.close()
 
@@ -264,6 +302,8 @@ def run_simulate(args: argparse.Namespace) -> int:
             f"# detection: {len(s.new_alerts)} new alerts from {s.hits} rule hits ({rules})",
             file=sys.stderr,
         )
+    if correlation:
+        print(f"# correlation: {_correlation_text(correlation)}", file=sys.stderr)
     if db_sink and db_sink.rejected:
         print(f"# warning: {db_sink.rejected} events rejected by the database", file=sys.stderr)
     return 0
@@ -299,6 +339,7 @@ def run_detect(args: argparse.Namespace) -> int:
         store.close()
         return 2
     summary = detector.run()
+    correlation = _correlate(store, args.config_dir)
     total = store.stats()["alerts"]
     store.close()
     rules = ", ".join(f"{r.rule_id}" for r in detector.rules)
@@ -309,7 +350,172 @@ def run_detect(args: argparse.Namespace) -> int:
     print(f"alerts:     {len(summary.new_alerts)} new, {total} in the database")
     for a in summary.new_alerts:
         print(f"  {a.alert_id}  {a.severity:<8} {a.rule_id}  {a.title}")
+    if correlation:
+        print(f"incidents:  {_correlation_text(correlation)}")
     return 0
+
+
+# ---- correlate / incidents ------------------------------------------------------------------
+def _correlate(store, config_dir):
+    from fridgeguard.detection import Correlator
+
+    try:
+        return Correlator.from_config(store, config_dir).run()
+    except (ValueError, KeyError) as exc:
+        print(f"error in correlation config: {exc}", file=sys.stderr)
+        return None
+
+
+def _correlation_text(summary) -> str:
+    text = (
+        f"{len(summary.created)} new, {len(summary.updated)} updated "
+        f"from {summary.alerts} alerts ({summary.candidates} connected groups)"
+    )
+    if summary.merged:
+        text += "; merged " + ", ".join(f"{a} into {b}" for a, b in summary.merged)
+    return text
+
+
+def run_correlate(args: argparse.Namespace) -> int:
+    from fridgeguard.storage import EventStore
+
+    _utf8_stdout()
+    if not Path(args.db).exists():
+        print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
+        return 2
+    store = EventStore(args.db)
+    try:
+        summary = _correlate(store, args.config_dir)
+        if summary is None:
+            return 2
+        print(f"incidents:  {_correlation_text(summary)}")
+        for inc in store.incidents():
+            if inc["incident_id"] in summary.created:
+                print(f"  {inc['incident_id']}  {inc['severity']:<8} {inc['title']}")
+    finally:
+        store.close()
+    return 0
+
+
+def run_incidents(args: argparse.Namespace) -> int:
+    from fridgeguard.storage import EventStore
+
+    _utf8_stdout()
+    if not Path(args.db).exists():
+        print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
+        return 2
+    if args.incidents_command == "review":
+        store = EventStore(args.db)
+        try:
+            current = store.incident(args.incident_id)
+            if current is None:
+                print(f"error: no incident {args.incident_id}", file=sys.stderr)
+                return 2
+            if not args.note.strip():
+                print("error: a note is required", file=sys.stderr)
+                return 2
+            verdict = args.verdict or current["verdict"]
+            store.add_incident_review(
+                args.incident_id,
+                args.analyst or _default_analyst(),
+                args.status,
+                verdict,
+                args.note.strip(),
+            )
+            print(f"{args.incident_id}  now {args.status}, verdict {verdict}")
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        finally:
+            store.close()
+        return 0
+
+    store = EventStore(args.db, read_only=True)
+    try:
+        if args.incidents_command == "list":
+            return _list_incidents(store, args)
+        return _show_incident(store, args.incident_id)
+    finally:
+        store.close()
+
+
+def _list_incidents(store, args) -> int:
+    from fridgeguard.storage.store import SEVERITY_LEVELS
+
+    rows = store.incidents(
+        pattern_id=args.pattern_id,
+        min_severity=SEVERITY_LEVELS.index(args.min_severity) if args.min_severity else None,
+        status=args.status,
+        verdict=args.verdict,
+    )
+    rows.sort(key=lambda r: (-r["severity_rank"], r["first_seen"]))
+    print(format_incident_table(rows))
+    return 0
+
+
+def _show_incident(store, incident_id: str) -> int:
+    import json
+
+    inc = store.incident(incident_id)
+    if inc is None:
+        print(f"error: no incident {incident_id}", file=sys.stderr)
+        return 2
+    print(f"{inc['incident_id']}  {inc['severity']}  {inc['pattern_id']} {inc['pattern_name']}")
+    if inc["merged_into"]:
+        print(f"merged into: {inc['merged_into']}")
+    print(f"title:       {inc['title']}")
+    print(f"description: {inc['description']}")
+    print(f"first seen:  {inc['first_seen']}   last seen: {inc['last_seen']}")
+    print(f"status:      {inc['status']}   verdict: {inc['verdict']}")
+    print(f"confidence:  {inc['confidence']} ({inc['confidence_level']})")
+    for points, reason in json.loads(inc["confidence_factors"]):
+        print(f"  {points:+4d}  {reason}")
+    ent = json.loads(inc["entities"])
+    for key in ("devices", "users", "claimed_users", "source_ips", "sessions"):
+        if ent.get(key):
+            print(f"{key + ':':<13}{', '.join(ent[key])}")
+    print(f"ATT&CK:      {', '.join(json.loads(inc['attack_ids']))}")
+    print(f"implements:  {', '.join(json.loads(inc['implements']))}")
+    steps = json.loads(inc["steps"])
+    if steps:
+        print("sequence:")
+        for st in steps:
+            mark = st["record_id"] or ("not seen (optional)" if st["optional"] else "-")
+            print(f"  {st['label']:<45} {mark}")
+    members = store.incident_members(incident_id)
+    print(f"timeline ({len(members)} records):")
+    for m in members:
+        print(f"  {_fmt_ts(m['ts'])}  {m['record_id']:<11} {m['note']}")
+    print("analyst must verify:")
+    for q in json.loads(inc["questions"]):
+        print(f"  - {q}")
+    print("recommended response:")
+    for r in json.loads(inc["response"]):
+        print(f"  - {r}")
+    reviews = store.incident_reviews(incident_id)
+    print(f"reviews ({len(reviews)}):")
+    for r in reviews:
+        print(
+            f"  {_fmt_ts(r['ts'])}  {r['analyst']:<12} {r['status']:<13} "
+            f"{r['verdict']:<15} {r['note']}"
+        )
+    return 0
+
+
+def format_incident_table(rows: list[dict]) -> str:
+    header = (
+        f"{'Incident ID':<17} {'First seen (UTC)':<16}  {'Severity':<8} {'Pattern':<8} "
+        f"{'Conf.':>5}  {'Alerts':>6} {'Records':>7}  {'Status':<13} {'Verdict':<14} Title"
+    )
+    lines = [header, "-" * 140]
+    for r in rows:
+        lines.append(
+            f"{r['incident_id']:<17} {_fmt_ts(r['first_seen']):<16}  {r['severity']:<8} "
+            f"{r['pattern_id']:<8} {r['confidence']:>5}  {r['alert_count']:>6} "
+            f"{r['record_count']:>7}  {r['status']:<13} {r['verdict']:<14} {r['title']}"
+        )
+    lines.append(f"({len(rows)} incidents)")
+    return "\n".join(lines)
 
 
 def _print_counts(store) -> None:
@@ -521,6 +727,8 @@ def run_events(args: argparse.Namespace) -> int:
             print(f"telemetry         {s['telemetry']}")
             print(f"security events   {s['security_events']}")
             print(f"rejected events   {s['rejected']}")
+            print(f"alerts            {s['alerts']}")
+            print(f"incidents         {s['incidents']}")
             print(f"time range (UTC)  {s['time_range'][0]} .. {s['time_range'][1]}")
             print("by type:    " + ", ".join(f"{k} {v}" for k, v in s["by_type"].items()))
             print("by status:  " + ", ".join(f"{k} {v}" for k, v in s["by_status"].items()))
@@ -591,6 +799,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_detect(args)
     if args.command == "alerts":
         return run_alerts(args)
+    if args.command == "correlate":
+        return run_correlate(args)
+    if args.command == "incidents":
+        return run_incidents(args)
     parser.print_help()
     return 0
 

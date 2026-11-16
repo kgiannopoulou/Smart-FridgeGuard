@@ -53,9 +53,11 @@ def test_cli_check_env_passes(capsys):
     assert "checks passed" in capsys.readouterr().out
 
 
-def test_dashboard_renders_without_errors():
+def test_dashboard_renders_without_errors(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
 
+    monkeypatch.setenv("FRIDGEGUARD_DB", str(tmp_path / "none.db"))
     app = AppTest.from_file("../dashboard/app.py", default_timeout=30).run()
     assert not app.exception
-    assert app.title[0].value == "Smart-FridgeGuard SOC dashboard"
+    assert app.title[0].value == "Security operations overview"
+    assert "No event database" in app.warning[0].value
