@@ -116,6 +116,7 @@ with ui.reader(ctx.db) as store:
     evidence = store.alert_evidence(alert_id)
     history = store.alert_history(alert_id)
     current = store.alert(alert_id)
+    notes = store.notifications(alert_id=alert_id)
 
 st.divider()
 st.markdown(
@@ -145,8 +146,14 @@ st.page_link(
     query_params={"alert": alert_id},
 )
 
-ev_tab, hist_tab, act_tab = st.tabs(
-    [f"Evidence ({len(evidence)})", f"History ({len(history)})", "Triage"]
+sent = sum(n["status"] == "sent" for n in notes)
+ev_tab, hist_tab, ntf_tab, act_tab = st.tabs(
+    [
+        f"Evidence ({len(evidence)})",
+        f"History ({len(history)})",
+        f"Notifications ({sent} sent / {len(notes)})",
+        "Triage",
+    ]
 )
 with ev_tab:
     st.dataframe(evidence, hide_index=True, width="stretch")
@@ -155,6 +162,49 @@ with hist_tab:
         st.dataframe(history, hide_index=True, width="stretch")
     else:
         st.caption("No changes yet.")
+with ntf_tab:
+    if notes:
+        st.dataframe(
+            [
+                {
+                    k: n[k]
+                    for k in (
+                        "notification_id",
+                        "ts",
+                        "channel",
+                        "kind",
+                        "severity",
+                        "status",
+                        "held_back",
+                        "dedup_key",
+                        "reason",
+                    )
+                }
+                for n in notes
+            ],
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "notification_id": "ID",
+                "ts": "Activity (UTC)",
+                "held_back": "Summarizes held back",
+                "dedup_key": "Dedup key",
+                "channel": "Channel",
+                "kind": "Kind",
+                "severity": "Severity",
+                "status": "Status",
+                "reason": "Reason",
+            },
+        )
+        st.caption(
+            "Suppressed rows are duplicates held back during the cooldown or by the rate "
+            "limit; escalations are always sent (config/notifications.yaml)."
+        )
+    else:
+        st.caption(
+            "No notifications for this alert: below the channels' minimum severity, or "
+            "notifications were off. `python -m fridgeguard notify run` notifies stored alerts."
+        )
 with act_tab:
     analyst = ui.analyst_name()
     options = ALERT_TRANSITIONS[current["status"]]

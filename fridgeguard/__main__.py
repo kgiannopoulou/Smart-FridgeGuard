@@ -84,6 +84,9 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument(
         "--no-detect", action="store_true", help="store events without running detection"
     )
+    sim.add_argument(
+        "--no-notify", action="store_true", help="detect without sending notifications"
+    )
     sim.add_argument("--config-dir", type=Path, help="alternative config directory")
 
     # ---- detect ----
@@ -95,6 +98,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     det.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
     det.add_argument("--config-dir", type=Path, help="alternative config directory")
+    det.add_argument("--no-notify", action="store_true", help="do not send notifications")
+
+    # ---- notify (Step 13) ----
+    ntf = sub.add_parser(
+        "notify",
+        help="notifications for important alerts (console, email, Telegram)",
+        description="Channels and deduplication are configured in config/notifications.yaml; "
+        "secrets come from the environment or .env.",
+    )
+    ntf.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
+    ntf.add_argument("--config-dir", type=Path, help="alternative config directory")
+    ntf_sub = ntf.add_subparsers(dest="notify_command", required=True)
+    ntf_sub.add_parser(
+        "run", help="notify stored alerts not yet handled (also retries failed deliveries)"
+    )
+    ntf_list = ntf_sub.add_parser("list", help="notification log (sent, suppressed, failed)")
+    ntf_list.add_argument("--alert", dest="alert_id")
+    ntf_list.add_argument("--channel", choices=["console", "email", "telegram"])
+    ntf_list.add_argument("--status", choices=["sent", "suppressed", "failed"])
+    ntf_sub.add_parser("stats", help="counts per channel and status")
+    ntf_sub.add_parser("channels", help="configured channels (secrets are never shown)")
+    ntf_test = ntf_sub.add_parser("test", help="send a test message through one channel")
+    ntf_test.add_argument("channel", choices=["console", "email", "telegram"])
 
     # ---- correlate / incidents ----
     cor = sub.add_parser(
@@ -289,7 +315,7 @@ def run_simulate(args: argparse.Namespace) -> int:
         sinks.append(log)
 
     sim = Simulation(settings, sinks, args.config_dir)
-    db_sink = detector = None
+    db_sink = detector = notifier = None
     if str(args.db) != "-":
         store = EventStore(args.db)
         store.register_devices(sim.fleet)
@@ -299,8 +325,11 @@ def run_simulate(args: argparse.Namespace) -> int:
             from fridgeguard.detection import Detector
 
             try:
+                notifier = None if args.no_notify else _notifier(store, args.config_dir)
                 detector = Detector.from_config(
-                    store, args.config_dir, on_alert=_alert_printer(args.show)
+                    store,
+                    args.config_dir,
+                    on_alert=_alert_hook(_alert_printer(args.show), notifier),
                 )
             except ValueError as exc:
                 print(f"error in detection config: {exc}", file=sys.stderr)
@@ -327,6 +356,8 @@ def run_simulate(args: argparse.Namespace) -> int:
     if detector:
         detector.finish(sim.now)
         correlation = _correlate(db_sink.store, args.config_dir)
+        if notifier:
+            notifier.check_escalations(None, sim.now)
     if db_sink:
         db_sink.store.close()
 
@@ -345,6 +376,8 @@ def run_simulate(args: argparse.Namespace) -> int:
         )
     if correlation:
         print(f"# correlation: {_correlation_text(correlation)}", file=sys.stderr)
+    if notifier:
+        print(f"# notifications: {notifier.summary.text()}", file=sys.stderr)
     if db_sink and db_sink.rejected:
         print(f"# warning: {db_sink.rejected} events rejected by the database", file=sys.stderr)
     return 0
@@ -363,6 +396,113 @@ def _alert_printer(show: str):
     return print_alert
 
 
+def _notifier(store, config_dir):
+    """The configured notifier, or None when notifications are switched off."""
+    from fridgeguard.notifications import Notifier
+
+    notifier, warnings = Notifier.from_config(store, config_dir)
+    for w in warnings:
+        print(f"# notifications: {w}", file=sys.stderr)
+    return notifier if notifier.channels else None
+
+
+def _alert_hook(printer, notifier):
+    def hook(alert) -> None:
+        if printer:
+            printer(alert)
+        if notifier:
+            notifier.on_alert(alert)
+
+    return hook
+
+
+def run_notify(args: argparse.Namespace) -> int:
+    from fridgeguard.notifications import Notifier, Settings, build_channels
+    from fridgeguard.notifications.channels import mask
+    from fridgeguard.storage import EventStore
+
+    _utf8_stdout()
+    cmd = args.notify_command
+    try:
+        settings = Settings.from_config(args.config_dir)
+    except ValueError as exc:
+        print(f"error in notifications config: {exc}", file=sys.stderr)
+        return 2
+    if cmd == "channels":
+        channels, warnings = build_channels(settings.channel_specs)
+        print(
+            f"notifications {'enabled' if settings.enabled else 'DISABLED'}; "
+            f"cooldown {settings.cooldown.total_seconds():g} s, "
+            f"max {settings.max_per_hour}/hour per channel"
+        )
+        for c in channels:
+            extra = ""
+            if c.name == "email":
+                extra = (
+                    f" mode {c.mode}, "
+                    + (
+                        f"outbox {c.outbox_dir}"
+                        if c.mode == "file"
+                        else f"SMTP {c.smtp_host}:{c.smtp_port}"
+                    )
+                    + f", to {', '.join(c.recipients)}, password {mask(c._password)}"
+                )
+            if c.name == "telegram":
+                extra = f" token {mask(c._token)}, chat {mask(c.chat_id)}"
+            print(f"  {c.name:<9} min severity {c.min_severity}{extra}")
+        for w in warnings:
+            print(f"  {w}")
+        return 0
+    if not Path(args.db).exists():
+        print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
+        return 2
+    store = EventStore(args.db, read_only=cmd in ("list", "stats"))
+    try:
+        if cmd == "list":
+            rows = store.notifications(args.alert_id, args.channel, args.status)
+            print(
+                f"{'ID':<11} {'Activity (UTC)':<16}  {'Channel':<9} {'Alert':<11} "
+                f"{'Kind':<9} {'Severity':<8} {'Status':<10} Reason"
+            )
+            for r in rows:
+                print(
+                    f"{r['notification_id']:<11} {_fmt_ts(r['ts']):<16}  {r['channel']:<9} "
+                    f"{r['alert_id']:<11} {r['kind']:<9} {r['severity']:<8} "
+                    f"{r['status']:<10} {r['reason']}"
+                )
+            print(f"({len(rows)} notifications)")
+            return 0
+        if cmd == "stats":
+            counts = store.notification_counts()
+            for channel, by_status in sorted(counts.items()):
+                text = ", ".join(f"{k} {v}" for k, v in sorted(by_status.items()))
+                print(f"{channel:<9} {text}")
+            if not counts:
+                print("no notifications yet")
+            return 0
+        if cmd == "test":
+            channels, warnings = build_channels(settings.channel_specs, only=[args.channel])
+            if not channels:
+                print(
+                    f"error: {'; '.join(warnings) or args.channel + ' not configured'}",
+                    file=sys.stderr,
+                )
+                return 2
+            notifier = Notifier(store, channels, settings)
+            d = notifier.send_test(channels[0])
+            print(f"{d.notification_id}  {d.channel} test {d.status}: {d.reason}")
+            return 0 if d.status == "sent" else 1
+        notifier = _notifier(store, args.config_dir)
+        if notifier is None:
+            print("notifications are disabled (config/notifications.yaml)")
+            return 0
+        summary = notifier.process_stored()
+        print(f"notify: {summary.text()}")
+        return 1 if summary.count("failed") else 0
+    finally:
+        store.close()
+
+
 # ---- detect / alerts ----------------------------------------------------------------------
 def run_detect(args: argparse.Namespace) -> int:
     from fridgeguard.detection import Detector
@@ -374,13 +514,18 @@ def run_detect(args: argparse.Namespace) -> int:
         return 2
     store = EventStore(args.db)
     try:
-        detector = Detector.from_config(store, args.config_dir)
+        notifier = None if args.no_notify else _notifier(store, args.config_dir)
+        detector = Detector.from_config(
+            store, args.config_dir, on_alert=_alert_hook(None, notifier)
+        )
     except ValueError as exc:
         print(f"error in detection config: {exc}", file=sys.stderr)
         store.close()
         return 2
     summary = detector.run()
     correlation = _correlate(store, args.config_dir)
+    if notifier:
+        notifier.check_escalations(None, max((a["last_seen"] for a in store.alerts()), default="0"))
     total = store.stats()["alerts"]
     store.close()
     rules = ", ".join(f"{r.rule_id}" for r in detector.rules)
@@ -393,6 +538,8 @@ def run_detect(args: argparse.Namespace) -> int:
         print(f"  {a.alert_id}  {a.severity:<8} {a.rule_id}  {a.title}")
     if correlation:
         print(f"incidents:  {_correlation_text(correlation)}")
+    if notifier:
+        print(f"notify:     {notifier.summary.text()}")
     return 0
 
 
@@ -952,6 +1099,9 @@ def format_telemetry_table(rows: list[dict]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from fridgeguard.config import load_dotenv
+
+    load_dotenv()  # secrets for notifications (never overrides the real environment)
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "check-env":
@@ -972,6 +1122,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_incidents(args)
     if args.command == "investigate":
         return run_investigate(args)
+    if args.command == "notify":
+        return run_notify(args)
     parser.print_help()
     return 0
 

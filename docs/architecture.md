@@ -251,6 +251,17 @@ Pages:
 | **Evidence integrity** | Every evidence record is re-verified against its SHA-256 hash when the report is built; the report states the result and a SHA-256 of the whole evidence set. |
 | **Requirements** | FR-6, FR-9, NFR-5 |
 
+### 3.7 Notifications
+
+| | |
+|---|---|
+| **Responsibility** | Tell the analyst about important alerts without flooding them. |
+| **Implementation** | **Implemented in Step 13** ([notifications.md](notifications.md)): `fridgeguard/notifications/`. The detector's `on_alert` hook feeds every rule hit to the `Notifier`, which sends through console, email (`.eml` file or SMTP) and optional Telegram channels. |
+| **Deduplication** | Key = correlated incident, or rule + subject. Duplicates within a 1-h cooldown are suppressed, escalations are sent at once, continuing activity gets an hourly reminder with the held-back count, and a per-channel rate limit applies (CRITICAL exempt). |
+| **State** | Append-only `notifications` table: every decision (sent / suppressed / failed) with its reason; re-runs never notify twice; failures are retried by `notify run`. |
+| **Security** | Secrets only from the environment / `.env`; never printed or stored. |
+| **Requirements** | FR-6 |
+
 ## 4. Data flow
 
 ### 4.1 Normal event flow

@@ -1,0 +1,29 @@
+Subject: [FridgeGuard] HIGH ALR-000025 5 failed logins from source IP
+ 203.0.113.50 within 1 min
+From: fridgeguard@store-a.example
+To: soc-team@store-a.example
+Date: Sun, 22 Nov 2026 15:14:47 +0000
+Message-ID: <179490135193.24892.10716938724459695267@fridgeguard.local>
+X-FridgeGuard-Alert: ALR-000025
+X-FridgeGuard-Severity: HIGH
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+5 failed logins from source IP 203.0.113.50 within 1 min
+
+5 failed login attempts from source IP 203.0.113.50 in 1 min (threshold 5 in =
+5 min). Usernames tried: root, system_admin, technician, unknown_user. Latest=
+ target: FRIDGE-001.
+
+Severity:  HIGH
+Alert:     ALR-000025 - DET-002 Multiple failed logins
+Fridge:    FRIDGE-001 Dairy display fridge
+Time:      2026-11-22 15:14:47 UTC (Sun 17:14 Europe/Athens)
+Held back: 2 similar notification(s) since 2026-11-16 04:22 UTC (ALR-000002)
+
+Investigate: http://localhost:8501/investigation?alert=3DALR-000025
+CLI:         python -m fridgeguard investigate start ALR-000025
+
+Smart-FridgeGuard (simulated data). Further identical alerts are held back fo=
+r the cooldown period; escalations are sent at once.

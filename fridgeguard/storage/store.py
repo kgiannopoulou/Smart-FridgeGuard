@@ -28,7 +28,7 @@ from fridgeguard.models import Event, iso_utc
 from fridgeguard.simulator.fleet import Fleet
 from fridgeguard.storage.normalize import STATUSES, ValidationError, event_from_json, normalize
 
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 SECURITY_FILTERS = {
     "device": "device = ?",
@@ -626,6 +626,82 @@ class EventStore:
         for status in paths[target][1:]:
             self.set_alert_status(alert_id, status, actor, note)
         return paths[target][1:]
+
+    # ---- notifications (Step 13) -------------------------------------------------------
+    def add_notification(self, row: dict[str, Any]) -> str:
+        """Append one notification decision. Returns its ID (``NTF-…``)."""
+        values = {"created_at": iso_utc(datetime.now(UTC)), "held_back": 0, **row}
+        columns = ", ".join(values)
+        marks = ", ".join("?" for _ in values)
+        cur = self.conn.execute(
+            f"INSERT INTO notifications ({columns}) VALUES ({marks})", list(values.values())
+        )
+        self.commit()
+        return self.conn.execute(
+            "SELECT notification_id FROM notifications WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()[0]
+
+    def last_sent_notification(self, channel: str, dedup_key: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """SELECT * FROM notifications WHERE channel = ? AND dedup_key = ?
+               AND status = 'sent' ORDER BY id DESC LIMIT 1""",
+            (channel, dedup_key),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def held_back_since(self, channel: str, dedup_key: str, after_id: int) -> list[dict[str, Any]]:
+        """Suppressed duplicates for a key after the notification with row id ``after_id``."""
+        rows = self.conn.execute(
+            """SELECT * FROM notifications WHERE channel = ? AND dedup_key = ?
+               AND status = 'suppressed' AND id > ? ORDER BY id""",
+            (channel, dedup_key, after_id),
+        )
+        return [dict(r) for r in rows]
+
+    def last_notified_ts(self, channel: str, alert_id: str) -> str | None:
+        """Activity time of the latest decision for an alert on a channel (any status
+        except failed): activity at or before it has already been handled."""
+        return self.conn.execute(
+            """SELECT MAX(ts) FROM notifications WHERE channel = ? AND alert_id = ?
+               AND status != 'failed'""",
+            (channel, alert_id),
+        ).fetchone()[0]
+
+    def max_notified_severity(self, channel: str, alert_id: str) -> int:
+        """Highest severity rank sent for an alert on a channel (-1 if none)."""
+        rows = self.conn.execute(
+            """SELECT DISTINCT severity FROM notifications WHERE channel = ? AND alert_id = ?
+               AND status = 'sent'""",
+            (channel, alert_id),
+        ).fetchall()
+        return max((SEVERITY_LEVELS.index(r[0]) for r in rows), default=-1)
+
+    def sent_since(self, channel: str, ts: str) -> int:
+        return self.conn.execute(
+            """SELECT COUNT(*) FROM notifications WHERE channel = ? AND status = 'sent'
+               AND kind != 'test' AND ts > ?""",
+            (channel, ts),
+        ).fetchone()[0]
+
+    def notifications(
+        self, alert_id: str | None = None, channel: str | None = None, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM notifications WHERE 1 = 1"
+        params: list[Any] = []
+        for column, value in (("alert_id", alert_id), ("channel", channel), ("status", status)):
+            if value:
+                sql += f" AND {column} = ?"
+                params.append(value)
+        return [dict(r) for r in self.conn.execute(sql + " ORDER BY id", params)]
+
+    def notification_counts(self) -> dict[str, dict[str, int]]:
+        rows = self.conn.execute(
+            "SELECT channel, status, COUNT(*) FROM notifications GROUP BY 1, 2"
+        ).fetchall()
+        counts: dict[str, dict[str, int]] = {}
+        for channel, status, n in rows:
+            counts.setdefault(channel, {})[status] = n
+        return counts
 
     # ---- prioritization support (Step 10) ----------------------------------------------
     def security_rows(self, event_ids: Iterable[str]) -> dict[str, dict[str, Any]]:

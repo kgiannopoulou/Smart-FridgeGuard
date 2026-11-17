@@ -1,0 +1,54 @@
+# Notifications for important alerts (Phase 3, Step 13).
+#
+# The notifier receives every detection hit: a new alert, or another hit on an alert that
+# is still active (a brute force keeps failing, a fridge keeps warming). Without
+# deduplication one ongoing incident would send hundreds of identical messages.
+#
+# Deduplication, per channel:
+#   key        the correlated incident if the alert belongs to one, otherwise
+#              rule + subject (e.g. DET-002 + source IP, DET-003 + fridge)
+#   new        first notification for a key                         -> sent
+#   duplicate  same key again within cooldown_s, same or lower severity -> suppressed (logged)
+#   escalated  same key, higher severity than the last one sent     -> sent at once
+#   ongoing    same key after cooldown_s                            -> one reminder that
+#              says how many notifications were held back
+#   rate limit more than max_per_hour sent on a channel             -> suppressed
+#              (CRITICAL always goes through)
+#
+# Times are the alert activity times, so a simulated week behaves like a real one.
+# Secrets (SMTP password, Telegram token) are never stored here: they come from the
+# environment or .env (see .env.example).
+
+enabled: true
+dashboard_url: http://localhost:8501   # links in messages point to the investigation page
+
+dedup:
+  cooldown_s: 3600
+rate_limit:
+  max_per_hour: 20
+
+channels:
+  console:
+    enabled: true
+    min_severity: MEDIUM
+
+  email:
+    enabled: true
+    min_severity: HIGH
+    # file: write each message as an .eml file to outbox_dir (works without a mail server)
+    # smtp: send through the SMTP server below (e.g. Mailpit on localhost:1025 for testing)
+    mode: file
+    outbox_dir: reports/outbox
+    smtp_host: localhost        # env FRIDGEGUARD_SMTP_HOST
+    smtp_port: 1025             # env FRIDGEGUARD_SMTP_PORT
+    starttls: false             # true for a real provider (port 587)
+    timeout_s: 10
+    sender: fridgeguard@store-a.example           # env FRIDGEGUARD_SMTP_FROM
+    recipients: [soc-team@store-a.example]        # env FRIDGEGUARD_SMTP_TO (comma-separated)
+    # username / password: env FRIDGEGUARD_SMTP_USER / FRIDGEGUARD_SMTP_PASSWORD
+
+  telegram:
+    enabled: false              # needs FRIDGEGUARD_TELEGRAM_TOKEN and FRIDGEGUARD_TELEGRAM_CHAT_ID
+    min_severity: HIGH
+    api_url: https://api.telegram.org
+    timeout_s: 10

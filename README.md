@@ -30,6 +30,7 @@ SOC dashboard supports alert triage and incident investigation.
 | | 10. Implement alert prioritization | [`fridgeguard/detection/prioritizer.py`](fridgeguard/detection/prioritizer.py), [`config/prioritization.yaml`](config/prioritization.yaml), alert workflow, [docs/alert-management.md](docs/alert-management.md) | Done |
 | 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`dashboard/`](dashboard/app.py) (Streamlit), data layer in [`fridgeguard/dashboard/`](fridgeguard/dashboard/), [docs/soc-dashboard.md](docs/soc-dashboard.md) | Done |
 | | 12. Build the incident investigation workflow | [`fridgeguard/investigation/`](fridgeguard/investigation/), [`config/investigation.yaml`](config/investigation.yaml), [report template](templates/incident-report.md), [example report](docs/examples/INV-000001.md) ([PDF](docs/examples/INV-000001.pdf)), [docs/investigation.md](docs/investigation.md) | Done |
+| | 13. Implement notifications | [`fridgeguard/notifications/`](fridgeguard/notifications/) (console, email, Telegram), [`config/notifications.yaml`](config/notifications.yaml), [example email](docs/examples/notification-ALR-000025.eml), [docs/notifications.md](docs/notifications.md) | Done |
 
 ## Quick start
 
@@ -151,6 +152,26 @@ re-verified against its SHA-256 hash when the report is built. Example:
 [INV-000001.md](docs/examples/INV-000001.md) · [INV-000001.pdf](docs/examples/INV-000001.pdf).
 See [docs/investigation.md](docs/investigation.md).
 
+## Notifications
+
+```powershell
+python -m fridgeguard notify channels          # configured channels (secrets shown as "(set)")
+python -m fridgeguard notify test email        # test one channel
+python -m fridgeguard notify run               # notify stored alerts not handled yet, retry failures
+python -m fridgeguard notify list --alert ALR-000025
+```
+
+Important alerts are sent while detection runs: **console** (MEDIUM and above), **email**
+(HIGH and above; `.eml` files in `reports/outbox/` by default, or a real SMTP server) and
+optional **Telegram** (bot API). Secrets come only from the environment or `.env`.
+
+Notifications are **deduplicated** per incident (or rule + subject): identical hits
+within a one-hour cooldown are held back and logged, a higher severity is sent at once,
+continuing activity gets one hourly reminder with the held-back count, and a per-channel
+rate limit stops storms (CRITICAL always goes through). A brute force of 300 attempts over
+2.5 hours gives 296 rule hits and 3 notifications. Every decision is stored, so re-runs never
+notify twice. See [docs/notifications.md](docs/notifications.md).
+
 ## SOC dashboard
 
 ```powershell
@@ -195,5 +216,6 @@ append-only tables. See [docs/event-database.md](docs/event-database.md).
 - [Alert management](docs/alert-management.md): severity classification INFO…CRITICAL, prioritization steps, alert statuses and workflow, triage queue
 - [Event correlation](docs/correlation.md): pivots, linking, attack patterns COR-001…004, confidence score, incident reviews
 - [SOC dashboard](docs/soc-dashboard.md): pages, online/offline logic, design rules, code map
+- [Notifications](docs/notifications.md): console, email and Telegram channels, deduplication (cooldown, escalation, reminders, rate limit), secrets, reliability
 - [Incident investigation](docs/investigation.md): L1 workflow, suggested decisions, escalation teams, incident report (Markdown/PDF), evidence integrity
 - [Event database](docs/event-database.md): telemetry vs. security audit events, event fields and types, status, integrity, CLI and SQL access

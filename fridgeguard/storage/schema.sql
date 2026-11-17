@@ -392,3 +392,33 @@ SELECT
     v.id AS ref
 FROM investigations v
 JOIN alerts a ON a.id = v.alert_ref;
+
+-- ---- notifications (Step 13) -----------------------------------------------------------
+-- Every notification decision per channel: sent, suppressed (duplicate, rate limit) or
+-- failed. Append-only, so it is also the deduplication state: a re-run never sends the
+-- same notification twice. ts is the time of the alert activity (simulated clock),
+-- created_at the wall-clock time of the decision.
+CREATE TABLE IF NOT EXISTS notifications (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    notification_id TEXT GENERATED ALWAYS AS ('NTF-' || printf('%06d', id)) STORED,
+    ts              TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    channel         TEXT NOT NULL,
+    alert_id        TEXT NOT NULL,
+    incident_id     TEXT,
+    dedup_key       TEXT NOT NULL,
+    kind            TEXT NOT NULL CHECK (kind IN ('new', 'escalated', 'ongoing', 'test')),
+    severity        TEXT NOT NULL
+                    CHECK (severity IN ('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')),
+    status          TEXT NOT NULL CHECK (status IN ('sent', 'suppressed', 'failed')),
+    reason          TEXT NOT NULL,
+    held_back       INTEGER NOT NULL DEFAULT 0,  -- suppressed notifications this one summarizes
+    subject         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_key ON notifications(channel, dedup_key, id);
+CREATE INDEX IF NOT EXISTS idx_notifications_alert ON notifications(channel, alert_id, id);
+
+CREATE TRIGGER IF NOT EXISTS notifications_no_update BEFORE UPDATE ON notifications
+BEGIN SELECT RAISE(ABORT, 'notifications is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS notifications_no_delete BEFORE DELETE ON notifications
+BEGIN SELECT RAISE(ABORT, 'notifications is append-only'); END;

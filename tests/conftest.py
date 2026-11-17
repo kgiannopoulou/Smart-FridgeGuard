@@ -43,3 +43,9 @@ def auth(directory_and_passwords, fleet, rng, sink):
 @pytest.fixture
 def passwords(directory_and_passwords):
     return directory_and_passwords[1]
+
+
+@pytest.fixture(autouse=True)
+def _email_outbox_in_tmp(tmp_path_factory, monkeypatch):
+    """CLI tests run detection with notifications on: keep their .eml files out of the repo."""
+    monkeypatch.setenv("FRIDGEGUARD_EMAIL_OUTBOX", str(tmp_path_factory.mktemp("outbox")))
