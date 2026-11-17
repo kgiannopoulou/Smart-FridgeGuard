@@ -77,6 +77,8 @@ class Scenario:
     @property
     def expectation_text(self) -> str:
         parts = [f"{e.rule} {e.wanted}" for e in self.expected if e.wanted != "INFO"]
+        if not parts and not self.incident:
+            parts.append("no alert above INFO")
         info = [e.rule for e in self.expected if e.wanted == "INFO"]
         if info:
             parts.append(f"{', '.join(info)} INFO (activity recorded)")
@@ -89,7 +91,7 @@ class Scenario:
                 f">= {self.out_of_range['min_readings']} out-of-range readings on "
                 f"{self.out_of_range['device']} (it really happened)"
             )
-        return "; ".join(parts) or "no alert above INFO"
+        return "; ".join(parts)
 
     @classmethod
     def load(cls, path: Path) -> Scenario:

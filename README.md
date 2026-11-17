@@ -31,6 +31,7 @@ SOC dashboard supports alert triage and incident investigation.
 | 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`dashboard/`](dashboard/app.py) (Streamlit), data layer in [`fridgeguard/dashboard/`](fridgeguard/dashboard/), [docs/soc-dashboard.md](docs/soc-dashboard.md) | Done |
 | | 12. Build the incident investigation workflow | [`fridgeguard/investigation/`](fridgeguard/investigation/), [`config/investigation.yaml`](config/investigation.yaml), [report template](templates/incident-report.md), [example report](docs/examples/INV-000001.md) ([PDF](docs/examples/INV-000001.pdf)), [docs/investigation.md](docs/investigation.md) | Done |
 | | 13. Implement notifications | [`fridgeguard/notifications/`](fridgeguard/notifications/) (console, email, Telegram), [`config/notifications.yaml`](config/notifications.yaml), [example email](docs/examples/notification-ALR-000025.eml), [docs/notifications.md](docs/notifications.md) | Done |
+| 4 – Testing, documentation and presentation | 14. Test the complete system | [test_results.md](test_results.md), test plan [`scenarios/`](scenarios/), [`tests/test_system.py`](tests/test_system.py), [`fridgeguard/evaluation/`](fridgeguard/evaluation/) | Done |
 
 ## Quick start
 
@@ -192,6 +193,35 @@ See [docs/soc-dashboard.md](docs/soc-dashboard.md).
 ![SOC dashboard overview](docs/images/dashboard-overview.png)
 ![Alert investigation](docs/images/dashboard-investigation.png)
 
+## Test the complete system
+
+```powershell
+python -m fridgeguard evaluate --seeds 20     # runs the test plan, writes test_results.md
+pytest tests/test_system.py                   # the same cases as automated tests
+```
+
+Ten controlled test cases ([`scenarios/`](scenarios/)) run through the real simulator and
+the production pipeline (validation, storage, detection, prioritization, notifications,
+correlation), each with 20 random seeds:
+
+| Test | Expected result | Result |
+|------|-----------------|--------|
+| Normal operation (24 h) | No security alert | 0 alerts above INFO in 20 simulated days |
+| Unauthorized setpoint change | Critical alert | DET-001 CRITICAL, 20 / 20 |
+| Five failed logins | Brute-force alert | DET-002 HIGH, 20 / 20 |
+| Temperature rises gradually | Temperature warning | DET-003, 20 / 20 |
+| Device stops sending readings | Offline alert | DET-005 HIGH, 20 / 20 |
+| Authorized technician changes settings | Authorized activity recorded | DET-007 INFO only, events normal, 20 / 20 |
+| Suspicious login followed by configuration change | Correlated incident | COR-002, 20 / 20 |
+| + full kill chain, and two boundary cases just under the thresholds | Critical incident / no alert | 20 / 20 each |
+
+200 / 200 runs passed: no missed detection, no false positive, identical results for the
+same seed, re-runs idempotent, every HIGH+ alert notified. Time to detect ranges from
+immediate (unauthorized change, suspicious login) and 80 s (brute force) to 2 min (offline)
+and 20-43 min (temperature: the cabinet must warm up, then stay out of range 15 min).
+The tests also found two defects, which are fixed. Details, limitations and how to
+reproduce: [test_results.md](test_results.md).
+
 ## Query the event database
 
 ```powershell
@@ -216,6 +246,7 @@ append-only tables. See [docs/event-database.md](docs/event-database.md).
 - [Alert management](docs/alert-management.md): severity classification INFO…CRITICAL, prioritization steps, alert statuses and workflow, triage queue
 - [Event correlation](docs/correlation.md): pivots, linking, attack patterns COR-001…004, confidence score, incident reviews
 - [SOC dashboard](docs/soc-dashboard.md): pages, online/offline logic, design rules, code map
+- [System test results](test_results.md): test plan, detection accuracy, false positives, missed detections, time to detect, reliability, defects found
 - [Notifications](docs/notifications.md): console, email and Telegram channels, deduplication (cooldown, escalation, reminders, rate limit), secrets, reliability
 - [Incident investigation](docs/investigation.md): L1 workflow, suggested decisions, escalation teams, incident report (Markdown/PDF), evidence integrity
 - [Event database](docs/event-database.md): telemetry vs. security audit events, event fields and types, status, integrity, CLI and SQL access
