@@ -391,3 +391,17 @@ def test_sustained_attack_does_not_flood(store, settings):
     assert [m.kind for m in rec.sent] == ["new", "ongoing", "ongoing"]
     assert [m.held_back for m in rec.sent] == [0, 119, 119]
     assert notifier.summary.count("suppressed") == summary.hits - 3
+
+
+def test_notify_run_and_detect_work_on_a_database_without_alerts(tmp_path, capsys):
+    """Found by the Step 14 boundary cases: no alerts at all used to crash."""
+    db = tmp_path / "quiet.db"
+    s = EventStore(db)
+    s.register_devices(Fleet.from_config(random.Random(0)))
+    Story(s).readings(TUE_0300, [4.0] * 5)
+    s.commit()
+    assert Notifier(s, [Recorder()], Settings.from_config()).process_stored().decisions == []
+    s.close()
+    assert main(["detect", "--db", str(db)]) == 0
+    assert main(["notify", "--db", str(db), "run"]) == 0
+    assert "nothing to notify" in capsys.readouterr().out

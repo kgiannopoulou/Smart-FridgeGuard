@@ -1,0 +1,14 @@
+id: TC-10
+name: Door left open for 10 minutes
+expected_result: No temperature alert (boundary case)
+description: >
+  Boundary case for TC-04: at night the dairy fridge's door stays open for 10 min. The
+  cabinet goes about 2-3 °C above its range for roughly 12 min and recovers, under the
+  15 min DET-003 needs, so it is recorded in the readings but raises no alert.
+start: "2026-11-17T00:00:00Z"   # 02:00 local, store closed: no other door openings
+duration: 2h
+steps:
+  - {id: door, at: 30m, action: door_open, device: FRIDGE-001, for: 10m}
+expect:
+  alerts: []
+  out_of_range: {device: FRIDGE-001, min_readings: 5}

@@ -1,0 +1,18 @@
+id: TC-02
+name: Unauthorized setpoint change
+expected_result: Critical alert
+description: >
+  The store manager (role without change_setpoint) raises the dairy fridge setpoint from
+  4 to 12 °C. The compromised controller (threat T-4) applies it anyway; the fridge warms.
+threat: T-4
+start: "2026-11-17T08:00:00Z"   # Tuesday 10:00 local, store open
+duration: 3h
+steps:
+  - {id: login, at: 30m, action: login, user: store_manager, device: FRIDGE-001, ip: 10.10.1.20}
+  - {id: change, at: 32m, action: change, session: login, parameter: setpoint_c, value: 12.0, enforce_rbac: false}
+  - {id: logout, at: 34m, action: logout, session: login}
+expect:
+  alerts:
+    - {rule: DET-001, severity: CRITICAL, from: change}
+    - {rule: DET-003, severity: CRITICAL, from: change}
+  allow: []

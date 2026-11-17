@@ -1,0 +1,15 @@
+id: TC-03
+name: Five failed logins
+expected_result: Brute-force alert
+description: >
+  Five login attempts in 80 s from an external IP, guessing usernames (one of them a real
+  account with a wrong password).
+threat: T-3
+start: "2026-11-17T08:00:00Z"
+duration: 1h
+steps:
+  - {id: burst, at: 20m, action: fail_logins, device: FRIDGE-002, ip: 203.0.113.50,
+     users: [admin, root, technician, maintenance_tech, service], interval_s: 20}
+expect:
+  alerts:
+    - {rule: DET-002, severity: HIGH, from: burst}

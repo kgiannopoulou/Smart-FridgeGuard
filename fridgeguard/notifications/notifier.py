@@ -228,8 +228,11 @@ class Notifier:
         return out
 
     def check_escalations(self, device_id: str | None, ts: str | datetime) -> list[Decision]:
-        """Re-prioritization can raise an *earlier* alert (e.g. an unauthorized change
-        becomes CRITICAL when the fridge warms up). Notify such escalations at once."""
+        """Re-prioritization can raise an *earlier* alert: an unauthorized change becomes
+        CRITICAL when the fridge warms up, or a temperature alert created as LOW (small
+        deviation, below a channel's threshold) becomes HIGH as the fridge keeps warming.
+        Notify both at once: the raise, and an alert that crosses a channel's threshold
+        for the first time. (Found by the Step 14 system tests.)"""
         when = iso_utc(_ts(ts))
         alerts = self.store.alerts(device=device_id) if device_id else self.store.alerts()
         out = []
@@ -237,13 +240,15 @@ class Notifier:
             if row["status"] not in OPEN_STATUSES:
                 continue
             for channel in self.channels:
-                notified = self.store.max_notified_severity(channel.name, row["alert_id"])
-                if notified < 0 or _rank(row["severity"]) <= notified:
-                    continue
                 if not channel.accepts(row["severity"]):
                     continue
-                done = self.store.last_notified_ts(channel.name, row["alert_id"]) or when
-                out.append(self._decide(channel, row, max(when, done)))
+                notified = self.store.max_notified_severity(channel.name, row["alert_id"])
+                done = self.store.last_notified_ts(channel.name, row["alert_id"])
+                if notified >= 0 and _rank(row["severity"]) <= notified:
+                    continue  # already notified at this severity or higher
+                if notified < 0 and done is not None:
+                    continue  # already decided (held back as a duplicate, or rate limited)
+                out.append(self._decide(channel, row, max(when, done or when)))
         return out
 
     def process_stored(self) -> NotifySummary:
@@ -257,9 +262,9 @@ class Notifier:
                     continue
                 if self.store.last_notified_ts(channel.name, row["alert_id"]) is None:
                     self._decide(channel, row, row["first_seen"])
-        self.check_escalations(
-            None, max((r["last_seen"] for r in self.store.alerts()), default="0")
-        )
+        latest = max((r["last_seen"] for r in self.store.alerts()), default=None)
+        if latest is not None:  # no alerts at all: nothing can have escalated
+            self.check_escalations(None, latest)
         return self.summary
 
     def send_test(self, channel: Channel) -> Decision:

@@ -1,0 +1,13 @@
+id: TC-04
+name: Temperature rises gradually
+expected_result: Temperature warning
+description: >
+  The dairy fridge's compressor stops for 3 h; the cabinet warms slowly towards room
+  temperature (door openings continue, store open).
+start: "2026-11-17T08:00:00Z"
+duration: 5h
+steps:
+  - {id: fault, at: 30m, action: compressor_fault, device: FRIDGE-001, for: 3h}
+expect:
+  alerts:
+    - {rule: DET-003, min_severity: LOW, from: fault}

@@ -1,0 +1,12 @@
+id: TC-01
+name: Normal operation
+expected_result: No security alert
+description: >
+  One full day of normal store activity (manager checks, technician maintenance inside
+  the window, admin tasks, door openings) with no injected anomalies.
+start: "2026-11-16T04:00:00Z"   # Monday 06:00 local
+duration: 24h
+activity: true
+steps: []
+expect:
+  alerts: []                    # no security alert; INFO maintenance records are allowed

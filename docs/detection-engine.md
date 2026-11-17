@@ -52,6 +52,7 @@ provides five reusable **rule types**; the YAML file creates **rule instances** 
 
 ```yaml
 dedup_window_s: 900            # group repeated hits within 15 min into one alert
+reprioritize_every_s: 300      # re-grade open temperature alerts every 5 min (Step 14)
 
 rules:
   DET-002:

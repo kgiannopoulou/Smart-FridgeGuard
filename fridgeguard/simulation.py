@@ -75,6 +75,7 @@ class Simulation:
             self.rng, settings.password_hash_iterations, config_dir
         )
         self.auth = AuthService.from_config(directory, users_cfg, self.fleet, self.rng, self.emit)
+        self.passwords = passwords  # in memory only; scripted test scenarios log in with them
         self.activity = (
             ActivitySimulator(self.auth, passwords, self.rng, settings.anomalies_per_day)
             if settings.activity

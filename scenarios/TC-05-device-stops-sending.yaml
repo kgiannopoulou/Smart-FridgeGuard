@@ -1,0 +1,12 @@
+id: TC-05
+name: Device stops sending readings
+expected_result: Offline alert
+description: The back-room freezer sends no readings for 20 min (network or power loss).
+threat: T-5
+start: "2026-11-17T08:00:00Z"
+duration: 2h
+steps:
+  - {id: outage, at: 30m, action: offline, device: FRIDGE-002, for: 20m}
+expect:
+  alerts:
+    - {rule: DET-005, severity: HIGH, from: outage}

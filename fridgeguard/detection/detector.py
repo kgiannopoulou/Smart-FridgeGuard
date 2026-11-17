@@ -105,6 +105,7 @@ class Detector:
         dedup_window_s: float = 900,
         on_alert: Callable[[Alert], None] | None = None,
         prioritizer: Prioritizer | None = None,
+        reprioritize_every_s: float = 300,
     ):
         if len({r.rule_id for r in rules}) != len(rules):
             raise ValueError("rule IDs must be unique")
@@ -113,6 +114,8 @@ class Detector:
         self.dedup_window = timedelta(seconds=dedup_window_s)
         self.on_alert = on_alert
         self.prioritizer = prioritizer
+        self.reprioritize_every = timedelta(seconds=reprioritize_every_s)
+        self._last_regrade: datetime | None = None
         self.now: datetime | None = None
         self.summary = DetectionSummary()
         # (rule_id, subject) -> (alert_id, time of the latest hit)
@@ -128,7 +131,8 @@ class Detector:
     ) -> Detector:
         rules, dedup = load_rules(config_dir)
         prioritizer = Prioritizer.from_config(store, config_dir) if prioritize else None
-        return cls(store, rules, dedup, on_alert, prioritizer)
+        every = float(load_yaml("detection.yaml", config_dir).get("reprioritize_every_s", 300))
+        return cls(store, rules, dedup, on_alert, prioritizer, every)
 
     # ---- processing ------------------------------------------------------------------
     def process(self, record: Record) -> list[Alert]:
@@ -167,7 +171,48 @@ class Detector:
         for rule in self.rules:
             for hit in rule.advance(now):
                 alerts.append(self._handle(rule, hit))
+        self._regrade(now)
         return alerts
+
+    def _regrade(self, now: datetime) -> None:
+        """Re-grade open temperature alerts every ``reprioritize_every`` (Step 14 fix: a
+        fridge that keeps warming used to stay LOW until the next hit or the end of the
+        run). Severity changes are reported through ``on_alert``."""
+        if not self.prioritizer or self.reprioritize_every.total_seconds() <= 0:
+            return
+        if self._last_regrade is not None and now - self._last_regrade < self.reprioritize_every:
+            return
+        self._last_regrade = now
+        rules = self.prioritizer.settings.temperature_rules
+        marks = ", ".join("?" for _ in rules)
+        ids = [
+            r[0]
+            for r in self.store.conn.execute(
+                f"""SELECT alert_id FROM alerts WHERE rule_id IN ({marks})
+                    AND status IN ('new', 'under_investigation') AND severity_locked = 0
+                    AND first_seen >= ?""",
+                # the prioritizer grades an excursion over at most 24 h
+                [*sorted(rules), iso_utc(now - timedelta(hours=24))],
+            )
+        ]
+        if not ids:
+            return
+        for alert_id, _old, _new in self.prioritizer.run(ids).changed:
+            row = self.store.alert(alert_id)
+            if self.on_alert:
+                self.on_alert(
+                    Alert(
+                        alert_id,
+                        row["rule_id"],
+                        row["rule_name"],
+                        row["severity"],
+                        row["device_id"],
+                        row["subject"],
+                        row["title"],
+                        now,
+                        False,
+                    )
+                )
 
     def _handle(self, rule: Rule, hit: RuleHit) -> Alert:
         if not hit.evidence:

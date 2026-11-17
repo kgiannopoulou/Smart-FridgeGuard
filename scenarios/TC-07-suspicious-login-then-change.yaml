@@ -1,0 +1,17 @@
+id: TC-07
+name: Suspicious login followed by configuration change
+expected_result: Correlated incident
+description: >
+  The technician's account logs in at 03:00 local time (outside the maintenance window)
+  and changes the freezer setpoint in the same session.
+threat: T-2
+start: "2026-11-17T00:00:00Z"   # Tuesday 02:00 local
+duration: 2h
+steps:
+  - {id: login, at: 60m, action: login, user: maintenance_tech, device: FRIDGE-002, ip: 10.10.1.30}
+  - {id: change, at: 62m, action: change, session: login, parameter: setpoint_c, value: -16.5}
+  - {id: logout, at: 70m, action: logout, session: login}
+expect:
+  alerts:
+    - {rule: DET-004, severity: MEDIUM, from: login}
+  incident: COR-002

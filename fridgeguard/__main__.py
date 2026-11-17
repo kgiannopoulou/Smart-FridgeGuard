@@ -100,6 +100,24 @@ def build_parser() -> argparse.ArgumentParser:
     det.add_argument("--config-dir", type=Path, help="alternative config directory")
     det.add_argument("--no-notify", action="store_true", help="do not send notifications")
 
+    # ---- evaluate (Step 14) ----
+    ev = sub.add_parser(
+        "evaluate",
+        help="run the system test plan (scenarios/TC-*.yaml) and write test_results.md",
+        description="Run every controlled scenario through the complete system with several "
+        "random seeds and measure detection accuracy, false positives, missed detections, "
+        "time to detect and alert generation reliability.",
+    )
+    ev.add_argument("--seeds", type=int, default=20, help="runs per test case (default 20)")
+    ev.add_argument("--first-seed", type=int, default=1)
+    ev.add_argument("--case", action="append", help="only this test case (repeatable)")
+    ev.add_argument(
+        "--out", default=None, help="Markdown output (default test_results.md; '-' = print only)"
+    )
+    ev.add_argument(
+        "--hash-iterations", type=int, default=None, help="PBKDF2 iterations (default: config)"
+    )
+
     # ---- notify (Step 13) ----
     ntf = sub.add_parser(
         "notify",
@@ -503,6 +521,45 @@ def run_notify(args: argparse.Namespace) -> int:
         store.close()
 
 
+def run_evaluate(args: argparse.Namespace) -> int:
+    from fridgeguard.evaluation.report import default_output, evaluate, to_markdown
+    from fridgeguard.evaluation.scenario import load_scenarios
+
+    _utf8_stdout()
+    if args.seeds < 1:
+        print("error: --seeds must be >= 1", file=sys.stderr)
+        return 2
+    try:
+        scenarios = load_scenarios(only=args.case)
+    except (ValueError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    seeds = list(range(args.first_seed, args.first_seed + args.seeds))
+
+    def progress(run) -> None:
+        state = "PASS" if run.passed else "FAIL"
+        detail = "; ".join(
+            [f"missed {m.expected.rule}" for m in run.missed]
+            + [f"false positive {a['rule_id']}" for a in run.false_positives]
+            + run.problems
+        )
+        print(f"{run.scenario.id} seed {run.seed:<3} {state}  {detail}", flush=True)
+
+    result = evaluate(scenarios, seeds, hash_iterations=args.hash_iterations, progress=progress)
+    passed = sum(r.passed for r in result.runs)
+    print(
+        f"\n{passed}/{len(result.runs)} runs passed | detection rate "
+        f"{100 * result.detection_rate:.1f} % | missed {result.missed} | false positives "
+        f"{result.false_positives} | deterministic {sum(result.determinism.values())}/"
+        f"{len(result.determinism)} | {result.wall_s:.0f} s"
+    )
+    if args.out != "-":
+        out = Path(args.out or default_output())
+        out.write_text(to_markdown(result), encoding="utf-8")
+        print(f"results written to {out}")
+    return 0 if passed == len(result.runs) else 1
+
+
 # ---- detect / alerts ----------------------------------------------------------------------
 def run_detect(args: argparse.Namespace) -> int:
     from fridgeguard.detection import Detector
@@ -524,8 +581,9 @@ def run_detect(args: argparse.Namespace) -> int:
         return 2
     summary = detector.run()
     correlation = _correlate(store, args.config_dir)
-    if notifier:
-        notifier.check_escalations(None, max((a["last_seen"] for a in store.alerts()), default="0"))
+    latest = max((a["last_seen"] for a in store.alerts()), default=None)
+    if notifier and latest is not None:
+        notifier.check_escalations(None, latest)
     total = store.stats()["alerts"]
     store.close()
     rules = ", ".join(f"{r.rule_id}" for r in detector.rules)
@@ -1124,6 +1182,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_investigate(args)
     if args.command == "notify":
         return run_notify(args)
+    if args.command == "evaluate":
+        return run_evaluate(args)
     parser.print_help()
     return 0
 

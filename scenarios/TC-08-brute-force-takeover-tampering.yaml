@@ -1,0 +1,22 @@
+id: TC-08
+name: Brute force, account takeover and tampering
+expected_result: Critical incident (full kill chain)
+description: >
+  The kill chain from the threat model: five failed logins from an external IP, then a
+  successful login with the technician's stolen password from the same IP at night, the
+  setpoint raised to 12 °C and the fridge warming.
+threat: T-3, T-2
+start: "2026-11-17T00:00:00Z"
+duration: 3h
+steps:
+  - {id: burst, at: 60m, action: fail_logins, device: FRIDGE-001, ip: 203.0.113.50,
+     users: [admin, root, technician, maintenance_tech, service], interval_s: 20}
+  - {id: login, at: 64m, action: login, user: maintenance_tech, device: FRIDGE-001, ip: 203.0.113.50}
+  - {id: change, at: 66m, action: change, session: login, parameter: setpoint_c, value: 12.0}
+  - {id: logout, at: 68m, action: logout, session: login}
+expect:
+  alerts:
+    - {rule: DET-002, severity: HIGH, from: burst}
+    - {rule: DET-004, severity: MEDIUM, from: login}
+    - {rule: DET-003, min_severity: HIGH, from: change}
+  incident: COR-001

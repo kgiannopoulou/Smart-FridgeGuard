@@ -18,6 +18,11 @@
 # this many seconds of the last hit are grouped into one alert.
 dedup_window_s: 900
 
+# Open temperature alerts are re-graded this often (activity time) while detection runs,
+# so an excursion that keeps getting worse goes from LOW to HIGH without waiting for the
+# next rule hit. A severity change is reported like a hit (notifications follow).
+reprioritize_every_s: 300
+
 rules:
   DET-001:
     name: Unauthorized setpoint change

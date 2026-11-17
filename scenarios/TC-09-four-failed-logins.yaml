@@ -1,0 +1,14 @@
+id: TC-09
+name: Four failed logins (below the threshold)
+expected_result: No brute-force alert (boundary case)
+description: >
+  Boundary case for TC-03: four mistyped logins in one minute, one fewer than the
+  DET-002 threshold of five. The events are stored (and marked suspicious where the
+  account is unknown), but no alert may be raised.
+start: "2026-11-17T08:00:00Z"
+duration: 1h
+steps:
+  - {id: burst, at: 20m, action: fail_logins, device: FRIDGE-002, ip: 10.10.1.20,
+     users: [store_manager, store_manager, store_manager, storemanager], interval_s: 20}
+expect:
+  alerts: []

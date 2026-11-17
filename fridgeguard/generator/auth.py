@@ -306,8 +306,14 @@ class AuthService:
         *,
         change_source: str = "local_panel",
         scenario: str = BASELINE,
+        enforce_rbac: bool = True,
     ) -> str:
-        """Try to change a setting on the session's device. Returns the result."""
+        """Try to change a setting on the session's device. Returns the result.
+
+        ``enforce_rbac=False`` models a compromised controller (threat T-4) that applies
+        a change although the role lacks the permission. The audit event still records
+        ``authorized: false``, which is what detection relies on.
+        """
         if session.session_id not in self.sessions:
             raise ValueError("session is not active")
         if parameter not in CONFIG_PARAMETERS:
@@ -318,7 +324,7 @@ class AuthService:
         permission = PARAMETER_PERMISSIONS[parameter]
         authorized = self.directory.has_permission(session.role, permission)
 
-        if not authorized:
+        if not authorized and enforce_rbac:
             result = RESULT_DENIED
         elif not self._valid_value(parameter, new_value):
             result = RESULT_REJECTED

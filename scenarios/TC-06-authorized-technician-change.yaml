@@ -1,0 +1,16 @@
+id: TC-06
+name: Authorized technician changes settings
+expected_result: Authorized activity recorded
+description: >
+  The maintenance technician logs in from the usual workstation inside the maintenance
+  window and nudges the setpoint from 4.0 to 4.5 °C.
+start: "2026-11-17T04:00:00Z"   # Tuesday 06:00 local, inside the maintenance window
+duration: 2h
+steps:
+  - {id: login, at: 30m, action: login, user: maintenance_tech, device: FRIDGE-001, ip: 10.10.1.30}
+  - {id: change, at: 32m, action: change, session: login, parameter: setpoint_c, value: 4.5}
+  - {id: logout, at: 40m, action: logout, session: login}
+expect:
+  alerts:
+    - {rule: DET-007, severity: INFO, from: change}   # authorized activity recorded
+  events_status: normal

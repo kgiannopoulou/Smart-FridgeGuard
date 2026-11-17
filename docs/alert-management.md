@@ -90,6 +90,14 @@ unauthorized change is HIGH on its own and becomes CRITICAL when the temperature
 refused attempt is MEDIUM. This also matches DR-4 (High) in
 [requirements.md](../requirements.md).
 
+**Re-grading while detection runs (added in Step 14).** A temperature alert is often
+created as LOW (the deviation is still small) and becomes HIGH as the fridge keeps warming.
+The detector re-grades open temperature alerts every `reprioritize_every_s` (300 s of
+activity time, `config/detection.yaml`) and reports a change like a rule hit, so the
+triage queue and the notifications follow the excursion live instead of waiting for the
+next hit or the end of the run. The system tests found this gap; see
+[test_results.md](../test_results.md).
+
 ## 3. Alert statuses
 
 ```mermaid
