@@ -130,6 +130,47 @@ def build_parser() -> argparse.ArgumentParser:
     inc_rev.add_argument("--note", required=True, help="findings behind the review")
     inc_rev.add_argument("--analyst", default=None)
 
+    # ---- investigate (Step 12) ----
+    from fridgeguard.storage.store import INVESTIGATION_STEPS
+
+    inv = sub.add_parser(
+        "investigate",
+        help="L1 alert investigation workflow and incident reports",
+        description="Open an investigation for an alert, record each step of the L1 "
+        "workflow and export the incident report (Markdown or PDF).",
+    )
+    inv.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
+    inv.add_argument("--config-dir", type=Path, help="alternative config directory")
+    inv_sub = inv.add_subparsers(dest="investigate_command", required=True)
+    inv_sub.add_parser("list", help="investigations and their progress")
+    inv_start = inv_sub.add_parser(
+        "start", help="open the investigation of an alert (assigns the alert to you)"
+    )
+    inv_start.add_argument("alert_id", help="e.g. ALR-000006")
+    inv_start.add_argument("--analyst", default=None)
+    inv_show = inv_sub.add_parser(
+        "show", help="gathered evidence, suggested decisions and recorded steps"
+    )
+    inv_show.add_argument("ref", help="investigation ID (INV-000001) or alert ID")
+    inv_rec = inv_sub.add_parser(
+        "record",
+        help="record one workflow step",
+        description="Steps: "
+        + ", ".join(f"{k} ({'/'.join(v)})" if v else k for k, v in INVESTIGATION_STEPS.items())
+        + ". Documenting the investigation also moves the alert's triage status.",
+    )
+    inv_rec.add_argument("investigation_id")
+    inv_rec.add_argument("step", choices=list(INVESTIGATION_STEPS))
+    inv_rec.add_argument("--decision", default=None, help="required for decision steps")
+    inv_rec.add_argument("--note", required=True, help="what you checked and found")
+    inv_rec.add_argument("--analyst", default=None)
+    inv_rep = inv_sub.add_parser("report", help="write the incident report")
+    inv_rep.add_argument("ref", help="investigation ID or alert ID")
+    inv_rep.add_argument("--format", choices=["md", "pdf"], default="md")
+    inv_rep.add_argument(
+        "--out", type=Path, default=Path("reports"), help="output file or directory"
+    )
+
     # ---- alerts ----
     al = sub.add_parser("alerts", help="list, prioritize and manage security alerts")
     al.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite event database")
@@ -437,6 +478,132 @@ def run_incidents(args: argparse.Namespace) -> int:
         return _show_incident(store, args.incident_id)
     finally:
         store.close()
+
+
+# ---- investigate (Step 12) ---------------------------------------------------------------
+def _resolve_alert(store, ref: str) -> str | None:
+    if ref.startswith("INV-"):
+        inv = store.investigation(ref)
+        return inv["alert_id"] if inv else None
+    return ref if store.alert(ref) else None
+
+
+def run_investigate(args: argparse.Namespace) -> int:
+    from fridgeguard.investigation import Settings, build_case, record, render, start
+    from fridgeguard.storage import EventStore
+
+    _utf8_stdout()
+    if not Path(args.db).exists():
+        print(f"error: {args.db} not found; run 'fridgeguard simulate' first", file=sys.stderr)
+        return 2
+    cmd = args.investigate_command
+    store = EventStore(args.db, read_only=cmd in ("list", "show", "report"))
+    try:
+        if cmd == "list":
+            print(format_investigation_table(store.investigations()))
+            return 0
+        if cmd == "start":
+            analyst = args.analyst or _default_analyst()
+            inv_id, created = start(store, args.alert_id, analyst)
+            state = "opened" if created else "already open"
+            print(f"{inv_id}  {state} for {args.alert_id} by {analyst}")
+            settings = Settings.from_config(args.config_dir)
+            print(_case_text(build_case(store, args.alert_id, settings)))
+            return 0
+        if cmd == "record":
+            analyst = args.analyst or _default_analyst()
+            moved = record(
+                store, args.investigation_id, args.step, analyst, args.note, args.decision
+            )
+            decision = f" ({args.decision})" if args.decision else ""
+            print(f"{args.investigation_id}  {args.step} recorded{decision}")
+            if moved:
+                print(f"alert moved to: {' -> '.join(moved)}")
+            return 0
+        alert_id = _resolve_alert(store, args.ref)
+        if alert_id is None:
+            print(f"error: no investigation or alert {args.ref}", file=sys.stderr)
+            return 2
+        case = build_case(store, alert_id, Settings.from_config(args.config_dir))
+        if cmd == "show":
+            print(_case_text(case))
+            return 0
+        content = render(case, args.format)
+        out = args.out
+        if out.suffix.lower() not in (".md", ".pdf"):
+            out = out / f"{case.investigation_id or alert_id}.{args.format}"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(content)
+        print(f"report written to {out}")
+        return 0
+    except (KeyError, ValueError) as exc:
+        print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 2
+    finally:
+        store.close()
+
+
+def format_investigation_table(rows: list[dict]) -> str:
+    header = (
+        f"{'Investigation':<14} {'Alert':<11} {'Rule':<8} {'Severity':<9} {'Device':<11} "
+        f"{'Steps':<6} {'Final status':<15} {'Alert status':<20} Opened by"
+    )
+    lines = [header, "-" * len(header)]
+    for r in rows:
+        lines.append(
+            f"{r['investigation_id']:<14} {r['alert_id']:<11} {r['rule_id']:<8} "
+            f"{r['severity']:<9} {r['device_id'] or '-':<11} {r['steps_done']}/8    "
+            f"{r['final_status'] or 'in progress':<15} {r['alert_status']:<20} {r['opened_by']}"
+        )
+    lines.append(f"({len(rows)} investigations)")
+    return "\n".join(lines)
+
+
+def _case_text(case) -> str:
+    from fridgeguard.investigation import STEP_LABELS
+
+    a, dev = case.alert, case.device
+    part = f", part of {case.incident['incident_id']}" if case.incident else ""
+    lines = [
+        f"{case.investigation_id or 'not opened'}  {a['alert_id']} {a['severity']} "
+        f"{a['rule_id']}: {a['title']}",
+        f"  status {a['status']}, assigned to {a['assigned_to'] or 'nobody'}{part}",
+    ]
+    if dev:
+        lines.append(
+            f"  fridge {dev['device_id']} {dev['name']} ({dev['location']}), range "
+            f"{dev['expected_range']}, out of range {dev['minutes_out']} min"
+        )
+    for u in case.users:
+        lines.append(
+            f"  user {u['user']}: {'registered' if u['registered'] else 'NOT registered'}, "
+            f"role {u['role']}, known IPs {', '.join(u['known_ips']) or '-'}"
+        )
+    for ip in case.source_ips:
+        lines.append(
+            f"  source IP {ip['source_ip']}: {'on' if ip['on_allow_list'] else 'NOT on'} the "
+            f"allow-list, {ip['failed_logins']} failed / {ip['logins']} successful logins"
+        )
+    lines.append(
+        f"  related events: {len(case.related_events)}, "
+        f"other alerts on the device: {len(case.related_alerts)}"
+    )
+    lines.append("workflow:")
+    for i, (step, label) in enumerate(STEP_LABELS.items(), start=1):
+        e = case.latest(step)
+        suggestion = case.suggestion(step)
+        if e:
+            state = f"done by {e['analyst']}" + (f": {e['decision']}" if e["decision"] else "")
+        elif suggestion:
+            state = f"open (suggested: {suggestion.decision})"
+        else:
+            state = "open"
+        lines.append(f"  {i}. {label:<47} {state}")
+    for name in ("authorization", "impact", "escalation"):
+        suggestion = getattr(case, name)
+        lines.append(f"why {name} = {suggestion.decision}:")
+        lines += [f"  - {r}" for r in suggestion.reasons]
+    return "\n".join(lines)
 
 
 def _list_incidents(store, args) -> int:
@@ -803,6 +970,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_correlate(args)
     if args.command == "incidents":
         return run_incidents(args)
+    if args.command == "investigate":
+        return run_investigate(args)
     parser.print_help()
     return 0
 

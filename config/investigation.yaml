@@ -1,0 +1,104 @@
+# Alert investigation workflow (Phase 3, Step 12).
+#
+# What the L1 analyst sees while investigating one alert: how far around the alert to
+# look for related events, which teams to escalate to, and a playbook per detection rule
+# (what to verify and the recommended response). When the alert belongs to a correlated
+# incident, the incident's own questions and response (config/correlation.yaml) are added.
+
+# Related events: everything on the affected device from this long before the alert
+# starts until this long after it ends.
+context_before_s: 7200
+context_after_s: 3600
+# User and source IP history: how far back to look for the same user / IP.
+history_days: 7
+
+# Fridges whose stock is safety-critical (impact is raised when they are affected).
+critical_device_types: [medical_fridge]
+
+# Escalation targets (decision values of the "escalation" step).
+teams:
+  l2_soc:
+    name: L2 SOC / incident response
+    when: Confirmed or likely unauthorized access, account takeover, CRITICAL alerts.
+  maintenance_engineering:
+    name: Refrigeration maintenance engineering
+    when: Equipment fault, temperature excursion without a security cause, device offline.
+  store_management:
+    name: Store management / food safety
+    when: Product was out of range and may need quarantine or disposal; pharmacy stock affected.
+  it_network:
+    name: IT / network team
+    when: External source IP to block, remote access to the controller to review.
+
+# Impact levels (decision values of the "impact" step) in increasing order.
+impact_levels:
+  none: No effect on the device, its settings or the stock.
+  low: Attempt only (refused, or no change); nothing to restore.
+  medium: Setting changed or short excursion; no stock at risk.
+  high: Stock at risk (sustained excursion) or access with stolen credentials.
+  critical: Safety-critical stock at risk, or tampering that changed the temperature.
+
+playbooks:
+  DET-001:
+    verify:
+      - Who made the change, from which source IP, and was the role allowed to change the setpoint?
+      - Was there an approved work order or call-out for this change?
+      - Is the new setpoint inside the fridge's safe operating range?
+    response:
+      - Recover - restore the setpoint from the last approved configuration.
+      - Contain - if the user did not make the change, lock the account and end its sessions.
+      - Safety - watch the temperature for the next hour; quarantine stock that goes out of range.
+  DET-002:
+    verify:
+      - Is the source IP on the device allow-list or a known site/vendor address?
+      - Which usernames were tried? Do they exist? (guessing generic names = brute force)
+      - Did any login from the same source IP succeed afterwards?
+    response:
+      - Contain - block the source IP at the store firewall if it is not a known address.
+      - Investigate - if a login succeeded, review everything that session did.
+      - Follow up - check whether the controller's login page should be reachable from outside.
+  DET-003:
+    verify:
+      - How far and for how long was the temperature out of range?
+      - Was there a configuration change shortly before the excursion?
+      - Are there signs of an equipment fault (compressor not running, door left open)?
+    response:
+      - Safety - check the product temperature; quarantine or discard stock that was out of range.
+      - Maintenance - send a technician if no configuration change explains the excursion.
+      - Recover - restore the setting if a change caused it.
+  DET-004:
+    verify:
+      - Was this out-of-hours access planned (work order) or an emergency call-out?
+      - Does the account owner confirm the login? Ask them directly, not through the account.
+      - Did the session change anything?
+    response:
+      - Confirm with the account owner; if not confirmed, treat as a compromised account.
+      - Follow up - require a work order for access outside the maintenance window.
+  DET-005:
+    verify:
+      - Is the fridge powered and connected (store staff can check the display)?
+      - Is only this fridge silent, or the whole store (network outage)?
+      - Did a configuration or firmware change happen just before it went silent?
+    response:
+      - Maintenance - ask store staff to check the unit and its network connection.
+      - Safety - take a manual temperature reading while telemetry is missing.
+      - Investigate - if a change preceded the outage, treat it as possible tampering.
+  DET-006:
+    verify:
+      - Which setting was changed, by whom, and was the role allowed to change it?
+      - Did the change weaken monitoring (wider alarm limits, longer defrost, firmware)?
+      - Was there an approved work order for this change?
+    response:
+      - Recover - restore the setting from the last approved configuration.
+      - Contain - if the user did not make the change, lock the account and end its sessions.
+      - Follow up - review the role's permissions.
+  DET-007:
+    verify:
+      - Does the activity match the planned maintenance (who, when, which settings)?
+    response:
+      - No action - record the maintenance activity as benign.
+  default:
+    verify:
+      - What triggered the alert, and is the evidence complete?
+    response:
+      - Review the evidence and decide whether the alert is a real problem.

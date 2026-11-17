@@ -28,7 +28,7 @@ from fridgeguard.models import Event, iso_utc
 from fridgeguard.simulator.fleet import Fleet
 from fridgeguard.storage.normalize import STATUSES, ValidationError, event_from_json, normalize
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 SECURITY_FILTERS = {
     "device": "device = ?",
@@ -75,6 +75,24 @@ INCIDENT_FILTERS = {
 }
 INCIDENT_STATUSES = ("open", "investigating", "closed")
 INCIDENT_VERDICTS = ("unverified", "true_positive", "benign", "false_positive", "undetermined")
+# Alert investigation workflow (Step 12): the steps of an L1 analyst's investigation, in
+# order, with the decisions each step accepts (None = notes only).
+INVESTIGATION_STEPS: dict[str, tuple[str, ...] | None] = {
+    "review_alert": None,
+    "affected_device": None,
+    "related_events": None,
+    "user_and_ip": None,
+    "authorization": ("authorized", "unauthorized", "unknown", "not_applicable"),
+    "impact": ("none", "low", "medium", "high", "critical"),
+    "escalation": (
+        "not_required",
+        "l2_soc",
+        "maintenance_engineering",
+        "store_management",
+        "it_network",
+    ),
+    "documentation": ("true_positive", "false_positive", "benign", "escalated", "undetermined"),
+}
 TELEMETRY_FILTERS = {
     "device": "device_id = ?",
     "device_status": "device_status = ?",
@@ -155,6 +173,7 @@ class EventStore:
         self.conn.executescript(
             f"""BEGIN;
             DROP VIEW IF EXISTS v_alerts;
+            DROP VIEW IF EXISTS v_investigations;
             {create.group(0).replace("IF NOT EXISTS alerts", "alerts_v3")}
             INSERT INTO alerts_v3 ({copied}, status, base_severity)
                 SELECT {copied}, CASE status {legacy} ELSE status END, severity FROM alerts;
@@ -516,6 +535,97 @@ class EventStore:
             (incident_id,),
         )
         return [dict(r) for r in rows]
+
+    # ---- alert investigations (Step 12) -------------------------------------------------
+    def open_investigation(self, alert_id: str, analyst: str) -> tuple[str, bool]:
+        """Open the investigation of an alert (one per alert). Returns ``(id, created)``."""
+        alert = self.alert(alert_id)
+        if alert is None:
+            raise KeyError(f"unknown alert {alert_id}")
+        existing = self.investigation_for_alert(alert_id)
+        if existing:
+            return existing["investigation_id"], False
+        self.conn.execute(
+            "INSERT INTO investigations (alert_ref, opened_at, opened_by) VALUES (?, ?, ?)",
+            (alert["ref"], iso_utc(datetime.now(UTC)), analyst),
+        )
+        self.commit()
+        return self.investigation_for_alert(alert_id)["investigation_id"], True
+
+    def investigation(self, investigation_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v_investigations WHERE investigation_id = ?", (investigation_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def investigation_for_alert(self, alert_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v_investigations WHERE alert_id = ?", (alert_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def investigations(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM v_investigations ORDER BY ref")
+        return [dict(r) for r in rows]
+
+    def add_investigation_entry(
+        self, investigation_id: str, step: str, analyst: str, note: str, decision: str | None
+    ) -> None:
+        """Append the analyst's answer for one workflow step."""
+        if step not in INVESTIGATION_STEPS:
+            raise ValueError(f"step must be one of {tuple(INVESTIGATION_STEPS)}")
+        allowed = INVESTIGATION_STEPS[step]
+        if allowed is None and decision:
+            raise ValueError(f"step '{step}' takes notes only, no decision")
+        if allowed is not None and decision not in allowed:
+            raise ValueError(f"decision for '{step}' must be one of {allowed}")
+        note = note.strip()
+        if not note:
+            raise ValueError("a note is required: write down what you checked and found")
+        if not analyst.strip():
+            raise ValueError("an analyst name is required")
+        cur = self.conn.execute(
+            """INSERT INTO investigation_entries
+               (investigation_ref, ts, analyst, step, decision, note)
+               SELECT id, ?, ?, ?, ?, ? FROM investigations WHERE investigation_id = ?""",
+            (iso_utc(datetime.now(UTC)), analyst, step, decision, note, investigation_id),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"unknown investigation {investigation_id}")
+        self.commit()
+
+    def investigation_entries(self, investigation_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT e.ts, e.analyst, e.step, e.decision, e.note
+               FROM investigation_entries e JOIN investigations v ON v.id = e.investigation_ref
+               WHERE v.investigation_id = ? ORDER BY e.id""",
+            (investigation_id,),
+        )
+        return [dict(r) for r in rows]
+
+    def move_alert_to(self, alert_id: str, target: str, actor: str, note: str) -> list[str]:
+        """Move an alert to ``target`` along the shortest allowed path of the triage
+        workflow (e.g. new -> under_investigation -> confirmed). Returns the statuses
+        passed through; empty if the alert is already there."""
+        alert = self.alert(alert_id)
+        if alert is None:
+            raise KeyError(f"unknown alert {alert_id}")
+        start = alert["status"]
+        if start == target:
+            return []
+        paths = {start: [start]}
+        queue = [start]
+        while queue and target not in paths:
+            current = queue.pop(0)
+            for nxt in ALERT_TRANSITIONS[current]:
+                if nxt not in paths:
+                    paths[nxt] = [*paths[current], nxt]
+                    queue.append(nxt)
+        if target not in paths:
+            raise ValueError(f"{alert_id} cannot move from '{start}' to '{target}'")
+        for status in paths[target][1:]:
+            self.set_alert_status(alert_id, status, actor, note)
+        return paths[target][1:]
 
     # ---- prioritization support (Step 10) ----------------------------------------------
     def security_rows(self, event_ids: Iterable[str]) -> dict[str, dict[str, Any]]:

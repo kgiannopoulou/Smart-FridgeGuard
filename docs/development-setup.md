@@ -66,10 +66,11 @@ Expected output of the environment check:
 [OK] yaml 6.0.3
 [OK] pydantic 2.14.3
 [OK] jinja2 3.1.6
+[OK] fpdf 2.9.0
 [OK] SQLite 3.50.4 (JSON + triggers OK)
 [OK] project folders (13) present
 
-10/10 checks passed
+11/11 checks passed
 ```
 
 The SQLite check does more than confirm SQLite exists: it creates a table, uses the JSON

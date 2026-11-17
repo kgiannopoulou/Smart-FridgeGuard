@@ -26,9 +26,10 @@ SOC dashboard supports alert triage and incident investigation.
 | | 6. Build the user and activity simulator | `fridgeguard/generator/`, [docs/simulation.md](docs/simulation.md) | Done |
 | 2 – Cybersecurity detection engine | 7. Build the event logging system | `fridgeguard/storage/`, [docs/event-database.md](docs/event-database.md) | Done |
 | | 8. Develop the detection engine | [`fridgeguard/detection/detector.py`](fridgeguard/detection/detector.py), rules in `fridgeguard/detection/rules/`, [`config/detection.yaml`](config/detection.yaml), [docs/detection-engine.md](docs/detection-engine.md) | Done |
-| | 9. Develop event correlation | [`fridgeguard/detection/correlator.py`](fridgeguard/detection/correlator.py), [`config/correlation.yaml`](config/correlation.yaml), patterns COR-001..004, `correlate` / `incidents` CLI | Done |
+| | 9. Develop event correlation | [`fridgeguard/detection/correlator.py`](fridgeguard/detection/correlator.py), [`config/correlation.yaml`](config/correlation.yaml), patterns COR-001..004, [docs/correlation.md](docs/correlation.md) | Done |
 | | 10. Implement alert prioritization | [`fridgeguard/detection/prioritizer.py`](fridgeguard/detection/prioritizer.py), [`config/prioritization.yaml`](config/prioritization.yaml), alert workflow, [docs/alert-management.md](docs/alert-management.md) | Done |
-| 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`dashboard/`](dashboard/app.py) (Streamlit), data layer in [`fridgeguard/dashboard/`](fridgeguard/dashboard/) | Done |
+| 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`dashboard/`](dashboard/app.py) (Streamlit), data layer in [`fridgeguard/dashboard/`](fridgeguard/dashboard/), [docs/soc-dashboard.md](docs/soc-dashboard.md) | Done |
+| | 12. Build the incident investigation workflow | [`fridgeguard/investigation/`](fridgeguard/investigation/), [`config/investigation.yaml`](config/investigation.yaml), [report template](templates/incident-report.md), [example report](docs/examples/INV-000001.md) ([PDF](docs/examples/INV-000001.pdf)), [docs/investigation.md](docs/investigation.md) | Done |
 
 ## Quick start
 
@@ -122,7 +123,33 @@ react to a change?) and matches ordered attack patterns: COR-001 brute force -> 
 tampering (CRITICAL), COR-002 suspicious login -> change, COR-003 brute force -> login,
 COR-004 change -> excursion. Each incident has a confidence score with its reasons, a
 timeline, questions to verify and a recommended response. Incidents start "unverified";
-analyst reviews are append-only.
+analyst reviews are append-only. See [docs/correlation.md](docs/correlation.md).
+
+## Investigate an alert (L1 SOC workflow)
+
+```powershell
+python -m fridgeguard investigate start ALR-000025           # assigns the alert to you
+python -m fridgeguard investigate show INV-000001            # gathered evidence + suggested decisions
+python -m fridgeguard investigate record INV-000001 authorization --decision unauthorized --note "External source guessing credentials"
+python -m fridgeguard investigate record INV-000001 documentation --decision true_positive --note "..."
+python -m fridgeguard investigate report INV-000001 --format pdf    # or --format md
+```
+
+For each alert the analyst works through eight steps: review the alert, identify the
+affected refrigerator, examine the related events, investigate the user and source IP,
+decide whether the activity was authorized, assess the potential impact, escalate to the
+right team (L2 SOC, maintenance engineering, store management, IT/network) and document
+the investigation. The system gathers the evidence for each step and suggests the three
+judgement calls with the reasons behind them. The analyst decides. Documenting the
+investigation moves the alert to confirmed / resolved / false positive.
+
+The result is a downloadable **incident report** in Markdown or PDF that follows the SOC
+template (incident ID, detection time, affected device, severity; then initial alert,
+investigation performed, evidence collected, event timeline, findings, potential impact,
+recommended response, escalation decision, final status). Every evidence record is
+re-verified against its SHA-256 hash when the report is built. Example:
+[INV-000001.md](docs/examples/INV-000001.md) · [INV-000001.pdf](docs/examples/INV-000001.pdf).
+See [docs/investigation.md](docs/investigation.md).
 
 ## SOC dashboard
 
@@ -132,14 +159,17 @@ streamlit run dashboard/app.py          # reads data/fridgeguard.db (or $env:FRI
 
 | Page | Shows |
 |------|-------|
-| Overview | fleet status, open alerts by severity, open incidents, latest alerts |
+| Overview | total fridges, online / offline, active alerts, critical incidents; fleet cards, open alerts by severity, open incidents, latest alerts |
 | Temperature monitoring | history per fridge with expected range, abnormal readings and excursions, device comparison |
 | Security monitoring | failed and successful logins, configuration changes, suspicious IPs, unusual access times |
 | Alert management | severity, timestamps, affected fridge, associated user, status; triage and severity override (audited) |
+| Alert investigation | the L1 workflow for one alert step by step, suggested decisions, event timeline, Markdown and PDF report download |
 | Incident investigation | event timeline, related alerts, evidence collected, analyst findings, recommended response, Markdown report |
 
+See [docs/soc-dashboard.md](docs/soc-dashboard.md).
+
 ![SOC dashboard overview](docs/images/dashboard-overview.png)
-![Incident investigation](docs/images/dashboard-incidents.png)
+![Alert investigation](docs/images/dashboard-investigation.png)
 
 ## Query the event database
 
@@ -163,4 +193,7 @@ append-only tables. See [docs/event-database.md](docs/event-database.md).
 - [Simulation](docs/simulation.md): refrigerator thermal model, reading format, users and roles, authentication, authorization, activity events
 - [Detection engine](docs/detection-engine.md): rules DET-001…DET-007, configuration, alert grouping and evidence, results against ground truth
 - [Alert management](docs/alert-management.md): severity classification INFO…CRITICAL, prioritization steps, alert statuses and workflow, triage queue
+- [Event correlation](docs/correlation.md): pivots, linking, attack patterns COR-001…004, confidence score, incident reviews
+- [SOC dashboard](docs/soc-dashboard.md): pages, online/offline logic, design rules, code map
+- [Incident investigation](docs/investigation.md): L1 workflow, suggested decisions, escalation teams, incident report (Markdown/PDF), evidence integrity
 - [Event database](docs/event-database.md): telemetry vs. security audit events, event fields and types, status, integrity, CLI and SQL access

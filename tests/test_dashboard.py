@@ -15,7 +15,7 @@ from tests.test_correlation import ATTACKER, Story
 from tests.test_detection import MON_0630, TUE_0300
 
 APP = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
-PAGES = ["overview", "temperature", "security", "alerts", "incidents"]
+PAGES = ["overview", "temperature", "security", "alerts", "investigation", "incidents"]
 
 
 def build_story_db(path: Path) -> Path:
@@ -161,3 +161,40 @@ def test_review_is_saved_from_the_investigation_page(tmp_path, monkeypatch):
         assert inc["verdict"] == "true_positive" and inc["reviewed_by"] == "anna"
     finally:
         s.close()
+
+
+def test_investigation_is_started_and_recorded_from_the_page(tmp_path, monkeypatch):
+    db = build_story_db(tmp_path / "investigate.db")
+    monkeypatch.setenv("FRIDGEGUARD_DB", str(db))
+    at = run_page("investigation")
+    at.sidebar.text_input(key="analyst").input("anna").run()
+    [b for b in at.button if b.label == "Start investigation"][0].click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    notes = [t for t in at.text_area if t.label == "Notes"]
+    notes[4].input("Owner confirmed by phone that they did not log in.")  # authorization
+    [b for b in at.button if "Determine whether" in b.label][0].click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert [d.label for d in at.get("download_button")] == ["Markdown", "PDF"]
+
+    s = EventStore(db, read_only=True)
+    try:
+        inv = s.investigations()[0]
+        assert inv["opened_by"] == "anna" and inv["alert_status"] == "under_investigation"
+        entry = s.investigation_entries(inv["investigation_id"])[0]
+        assert (entry["step"], entry["analyst"]) == ("authorization", "anna")
+        assert entry["decision"] in ("unauthorized", "not_applicable", "unknown", "authorized")
+    finally:
+        s.close()
+
+
+def test_device_status_online_and_offline(store):
+    from datetime import timedelta as td
+
+    assert data.heartbeat_timeout() == td(minutes=3)  # DET-005: 3 x 60 s
+    bounds = data.data_bounds(store)
+    status = data.device_status(store, bounds[1], td(minutes=3)).set_index("device_id")
+    # the story only has readings for FRIDGE-001/002 up to the warming; FRIDGE-003 never reports
+    assert not status.loc["FRIDGE-003", "online"]
+    assert status["last_seen"].notna().sum() == 2
+    early = data.device_status(store, status["last_seen"].dropna().min(), td(minutes=3))
+    assert early.set_index("device_id").loc["FRIDGE-002", "online"]

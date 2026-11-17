@@ -73,8 +73,8 @@ flowchart LR
     X -- "store alert" --> DB
     DB -- "read-only SQL" --> UI
     UI --> INV
-    INV -- "status, incidents" --> DB
-    INV --> RPT["reports/INC-*.md · PDF"]
+    INV -- "status, reviews, investigations" --> DB
+    INV --> RPT["reports/INV-*.md · PDF"]
     GEN -. "MQTT (later phase)" .-> TB
 ```
 
@@ -222,32 +222,33 @@ erDiagram
 | | |
 |---|---|
 | **Responsibility** | Show the analyst what is happening, now and historically. |
-| **Implementation** | `dashboard/app.py` plus pages in `dashboard/pages/`. |
-| **Data access** | Read-only SQL queries via the repository layer, cached for a few seconds (`st.cache_data(ttl=5)`), auto-refresh. |
+| **Implementation** | **Implemented in Step 11** ([soc-dashboard.md](soc-dashboard.md)): `dashboard/app.py` registers the pages in `dashboard/views/` with `st.navigation` (not `pages/`, which Streamlit would auto-discover a second time). Data functions are in `fridgeguard/dashboard/data.py`, without Streamlit, and are unit-tested. |
+| **Data access** | Read-only connection; queries cached with `st.cache_data`, keyed on the database file's modification time so new data shows on refresh. Audited actions open the database for writing for that one action. |
 | **Requirements** | FR-8, NFR-3 |
 
 Pages:
 
 | Page | Content |
 |------|---------|
-| Fleet overview | One card per fridge: online status, current temperature vs. safe range, open alerts. |
-| Temperatures | Time series per device with safe-range band and alert markers. |
-| Logins | Success/failure over time, top source IPs, failures per device. |
-| Configuration | Table of changes with old/new value, actor, source IP; highlights unauthorised changes. |
-| Alerts | Queue filtered by severity, status, device, rule; colour-coded normal/suspicious. |
-| Investigation | Selected alert's timeline, evidence and report export (component 6). |
+| Overview | Total fridges, online / offline (same 3-min heartbeat as DET-005), active alerts, critical incidents; one card per fridge; open alerts by severity; open incidents; latest alerts. |
+| Temperature monitoring | History per device with the expected range, abnormal readings and excursions, device comparison. |
+| Security monitoring | Failed / successful logins, configuration changes, suspicious IPs, unusual access times (heatmap). |
+| Alert management | Triage queue (severity, time, fridge, user, status), evidence, history, status and severity changes. |
+| Alert investigation | Step 12 L1 workflow for one alert, Markdown / PDF report (component 6). |
+| Incident investigation | Correlated incident: timeline, related alerts, evidence, analyst findings, recommended response. |
 
 ### 3.6 Alerts and incident investigation
 
 | | |
 |---|---|
 | **Responsibility** | Alert triage, grouping alerts into incidents and generating reports. |
-| **Implementation** | `fridgeguard/investigation/` with `triage.py`, `timeline.py`, `report.py`, templates in `templates/report.md.j2`. |
+| **Implementation** | Triage in `fridgeguard/storage/store.py` + `fridgeguard/detection/prioritizer.py` (Step 10); incidents in `fridgeguard/detection/correlator.py` (Step 9); investigation in `fridgeguard/investigation/` (Step 12): `case.py` (evidence gathering and suggestions), `workflow.py` (steps, final status → alert status), `report.py` (Markdown and PDF from the same blocks). Blank template: `templates/incident-report.md`. |
 | **Triage** | **Implemented in Step 10** ([alert-management.md](alert-management.md)): status `new → under_investigation → confirmed / false_positive / resolved`, assignment, required notes, severity INFO…CRITICAL from `config/prioritization.yaml`. Every change is written to `alert_history` with analyst and timestamp. |
-| **Incidents** | One or more related alerts grouped into an incident `INC-YYYYMMDD-NNN`. |
-| **Timeline** | All events for the affected devices from 15 min before the first alert to 15 min after the last one. |
-| **Report** | Markdown (Jinja2 template) and optional PDF. Sections: summary, affected devices, timeline, triggered rules with ATT&CK techniques, evidence, impact, recommended actions. |
-| **Evidence integrity** | The evidence table lists event IDs and SHA-256 hashes; the report ends with a hash of the whole evidence set. |
+| **Incidents** | **Implemented in Step 9** ([correlation.md](correlation.md)): related alerts and events grouped into `INC-YYYYMMDD-NNN` by pivots, linking and attack patterns COR-001…004, with a confidence score and append-only analyst reviews. |
+| **Investigation** | **Implemented in Step 12** ([investigation.md](investigation.md)): one `INV-NNNNNN` per alert; 8 L1 steps (review, fridge, related events, user/IP, authorized?, impact, escalation, documentation) recorded append-only; suggested decisions with reasons; the final status moves the alert. |
+| **Timeline** | Security events on the device or from the same sources/sessions from 2 h before to 1 h after the alert, excursion start/end, the alert, triage changes and analyst steps (`config/investigation.yaml`). |
+| **Report** | Markdown and PDF (fpdf2) built from the same section blocks, following the SOC template: header (incident ID, detection time, device, severity) + 1 initial alert, 2 investigation performed, 3 evidence, 4 timeline, 5 findings, 6 impact, 7 recommended response, 8 escalation, 9 final status. |
+| **Evidence integrity** | Every evidence record is re-verified against its SHA-256 hash when the report is built; the report states the result and a SHA-256 of the whole evidence set. |
 | **Requirements** | FR-6, FR-9, NFR-5 |
 
 ## 4. Data flow
@@ -287,10 +288,10 @@ sequenceDiagram
     DET->>DB: alert DR-9 Correlated attack (CRITICAL)
     UI->>DB: poll alerts (read-only)
     UI-->>AN: CRITICAL alert on FRIDGE-001
-    AN->>UI: acknowledge, create incident
-    UI->>DB: alert_history + incident INC-20261114-001
-    AN->>UI: export report
-    UI-->>AN: reports/INC-20261114-001.md
+    AN->>UI: start investigation, record the 8 steps
+    UI->>DB: alert_history + investigation INV-000001
+    AN->>UI: download report
+    UI-->>AN: INV-000001.md / INV-000001.pdf
 ```
 
 ### 4.3 Communication between components
@@ -301,8 +302,8 @@ sequenceDiagram
 | Generator → Detection | `queue.Queue` | `Event` dataclass | MQTT topic `fridgeguard/<device>/events` via ThingsBoard Edge |
 | Detection → SQLite | Repository layer, parameterised SQL | Rows | PostgreSQL / TimescaleDB |
 | SQLite → Dashboard | Read-only connection | pandas DataFrame | REST API |
-| Investigation → SQLite | Repository layer (write access limited to alert status and incidents) | Rows | — |
-| Investigation → Files | Jinja2 template rendering | Markdown, PDF | — |
+| Investigation → SQLite | `EventStore` methods (write access limited to alert status, incident reviews and investigation entries, all append-only) | Rows | — |
+| Investigation → Files | `report.py`: one block model rendered to Markdown and to PDF (fpdf2) | Markdown, PDF | — |
 
 The generator, simulator and detection engine run in one process (`fridgeguard run`).
 The dashboard runs as a second process (`streamlit run dashboard/app.py`).
@@ -364,8 +365,12 @@ Passwords are never part of any event. Tokens, if present, are masked to the fir
 > [event-database.md](event-database.md). They replace the single `events` table and
 > `event_classification` table sketched below. Telemetry and security audit events are now
 > separate tables (`telemetry`, `security_events`), and status is kept as an append-only
-> history (`event_status_history`). The `alerts`, `incidents` and `config_history` tables
-> below are still the plan for the detection and investigation steps.
+> history (`event_status_history`). Later steps implemented the rest differently from the
+> sketch: `alerts` + `alert_evidence` + `alert_history` (Steps 8 and 10,
+> [alert-management.md](alert-management.md)), `incidents` + `incident_members` +
+> `incident_reviews` (Step 9, [correlation.md](correlation.md)) and `investigations` +
+> `investigation_entries` (Step 12, [investigation.md](investigation.md)). `config_history`
+> is still a plan.
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -532,12 +537,13 @@ Smart-FridgeGuard/
 │   ├── storage/
 │   │   ├── schema.sql
 │   │   └── repository.py
-│   └── investigation/
+│   ├── dashboard/               # data layer for the dashboard (no Streamlit)
+│   └── investigation/           # case.py, workflow.py, report.py
 ├── dashboard/
 │   ├── app.py
-│   └── pages/
+│   └── views/                   # one file per page (not pages/: auto-discovery)
 ├── templates/
-│   └── report.md.j2
+│   └── incident-report.md       # blank SOC report template
 ├── tests/
 ├── data/                        # SQLite file (git-ignored)
 ├── reports/                     # generated reports (git-ignored)
@@ -554,7 +560,7 @@ Smart-FridgeGuard/
 | Configuration | YAML (`PyYAML`) | Readable, easy to change thresholds. |
 | Storage | SQLite 3 (standard library `sqlite3`) | No server, single file, transactions, triggers. |
 | Dashboard | Streamlit + Plotly + pandas | Fast to build interactive SOC views in Python. |
-| Reports | Jinja2 → Markdown; optional PDF export | Template-based, consistent report format. |
+| Reports | Python block model → Markdown and PDF (fpdf2) | One report definition, two formats that always match; fpdf2 is pure Python (no system libraries). |
 | CLI | `argparse` | Simple entry point: `python -m fridgeguard run --scenario kill_chain`. |
 | Tests | `pytest` | Each rule tested against its scenario and against the baseline. |
 | Container (optional) | Docker Compose: `engine` + `dashboard` sharing a volume | One-command start (NFR-7). |

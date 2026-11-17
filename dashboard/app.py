@@ -26,6 +26,7 @@ navigation = st.navigation(
         ],
         "Response": [
             st.Page(PAGES / "alerts.py", title="Alert management", icon="🚨"),
+            st.Page(PAGES / "investigation.py", title="Alert investigation", icon="🕵️"),
             st.Page(PAGES / "incidents.py", title="Incident investigation", icon="🔎"),
         ],
     }

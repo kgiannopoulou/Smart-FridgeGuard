@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 MIN_PYTHON = (3, 12)
-PACKAGES = ["pandas", "streamlit", "plotly", "pytest", "yaml", "pydantic", "jinja2"]
+PACKAGES = ["pandas", "streamlit", "plotly", "pytest", "yaml", "pydantic", "jinja2", "fpdf"]
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FOLDERS = [
     "config",

@@ -342,3 +342,53 @@ LEFT JOIN (
     JOIN (SELECT incident_ref, MAX(id) AS max_id FROM incident_reviews GROUP BY incident_ref) last
       ON ir.id = last.max_id
 ) r ON r.incident_ref = i.id;
+
+-- ---- alert investigations (Step 12) --------------------------------------------------
+-- An L1 analyst's case file for one alert. The workflow steps are recorded as append-only
+-- entries; the latest entry of each step is its current answer, earlier ones stay as the
+-- audit trail.
+CREATE TABLE IF NOT EXISTS investigations (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    investigation_id TEXT GENERATED ALWAYS AS ('INV-' || printf('%06d', id)) STORED,
+    alert_ref        INTEGER NOT NULL UNIQUE REFERENCES alerts(id),
+    opened_at        TEXT NOT NULL,
+    opened_by        TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_investigations_id ON investigations(investigation_id);
+
+CREATE TABLE IF NOT EXISTS investigation_entries (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    investigation_ref INTEGER NOT NULL REFERENCES investigations(id),
+    ts                TEXT NOT NULL,
+    analyst           TEXT NOT NULL,
+    step              TEXT NOT NULL CHECK (step IN (
+                          'review_alert', 'affected_device', 'related_events', 'user_and_ip',
+                          'authorization', 'impact', 'escalation', 'documentation')),
+    decision          TEXT,                     -- step-specific choice, NULL for notes-only steps
+    note              TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_investigation_entries ON investigation_entries(investigation_ref, id);
+
+CREATE TRIGGER IF NOT EXISTS investigation_entries_no_update BEFORE UPDATE ON investigation_entries
+BEGIN SELECT RAISE(ABORT, 'investigation_entries is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS investigation_entries_no_delete BEFORE DELETE ON investigation_entries
+BEGIN SELECT RAISE(ABORT, 'investigation_entries is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS investigations_no_delete BEFORE DELETE ON investigations
+BEGIN SELECT RAISE(ABORT, 'investigations cannot be deleted'); END;
+
+-- Investigations with their alert, progress and final status.
+DROP VIEW IF EXISTS v_investigations;
+CREATE VIEW v_investigations AS
+SELECT
+    v.investigation_id, a.alert_id, a.rule_id, a.severity, a.device_id, a.title,
+    a.status AS alert_status, v.opened_at, v.opened_by,
+    (SELECT COUNT(DISTINCT e.step) FROM investigation_entries e
+      WHERE e.investigation_ref = v.id)                       AS steps_done,
+    (SELECT MAX(e.ts) FROM investigation_entries e
+      WHERE e.investigation_ref = v.id)                       AS updated_at,
+    (SELECT e.decision FROM investigation_entries e
+      WHERE e.investigation_ref = v.id AND e.step = 'documentation'
+      ORDER BY e.id DESC LIMIT 1)                             AS final_status,
+    v.id AS ref
+FROM investigations v
+JOIN alerts a ON a.id = v.alert_ref;

@@ -138,6 +138,12 @@ st.caption(
 )
 if alert["incident_id"]:
     st.caption(f"Part of incident **{alert['incident_id']}**: see Incident investigation.")
+st.page_link(
+    "views/investigation.py",
+    label="Investigate this alert (L1 workflow and incident report)",
+    icon="🕵️",
+    query_params={"alert": alert_id},
+)
 
 ev_tab, hist_tab, act_tab = st.tabs(
     [f"Evidence ({len(evidence)})", f"History ({len(history)})", "Triage"]

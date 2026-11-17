@@ -3,7 +3,7 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from fridgeguard.dashboard import ui
+from fridgeguard.dashboard import data, ui
 from fridgeguard.dashboard.theme import SEVERITY_COLORS, SEVERITY_ORDER, device_colors, style
 
 ctx = ui.page("Security operations overview", "Smart-FridgeGuard SOC · refrigerator fleet")
@@ -24,13 +24,54 @@ latest = tel.sort_values("ts").groupby("device_id").tail(1) if not tel.empty els
 in_range = int((~latest["out_of_range"]).sum()) if not latest.empty else 0
 failed = int((sec["event_type"] == "LOGIN_FAILURE").sum()) if not sec.empty else 0
 urgent = int(open_alerts["severity"].isin(["CRITICAL", "HIGH"]).sum())
+timeout = data.heartbeat_timeout()
+status = ctx.get("device_status", ctx.until, timeout)
+online = int(status["online"].sum())
+critical_inc = int((open_inc["severity"] == "CRITICAL").sum()) if not open_inc.empty else 0
 
 c = st.columns(5)
-c[0].metric("In range", f"{in_range} / {len(devs)}", border=True)
-c[1].metric("Open alerts", len(open_alerts), border=True, help="new or under investigation")
-c[2].metric("Crit. + high", urgent, border=True)
-c[3].metric("Incidents", len(open_inc), border=True, help="not closed")
-c[4].metric("Failed logins", failed, border=True, help="in the selected time range")
+c[0].metric(
+    "Refrigerators",
+    len(devs),
+    f"{in_range} in range",
+    delta_color="off",
+    delta_arrow="off",
+    border=True,
+)
+c[1].metric(
+    "Online",
+    online,
+    border=True,
+    help=f"a reading within the last {timeout.total_seconds() / 60:g} min (as DET-005)",
+)
+c[2].metric(
+    "Offline",
+    len(status) - online,
+    border=True,
+    help=f"no reading for more than {timeout.total_seconds() / 60:g} min",
+)
+c[3].metric(
+    "Active alerts",
+    len(open_alerts),
+    f"{urgent} critical or high",
+    delta_color="off",
+    delta_arrow="off",
+    border=True,
+    help="new or under investigation, INFO excluded",
+)
+c[4].metric(
+    "Critical incidents",
+    critical_inc,
+    f"{len(open_inc)} open in total",
+    delta_color="off",
+    delta_arrow="off",
+    border=True,
+    help="incidents not closed",
+)
+st.caption(
+    f"Online/offline at {ui.fmt_ts(ctx.until)} UTC, the newest record in the database. "
+    f"{failed} failed logins in the selected time range."
+)
 
 st.subheader("Fleet status")
 cols = st.columns(max(len(devs), 1))
@@ -42,7 +83,9 @@ for col, (_, d) in zip(cols, devs.iterrows(), strict=False):
             st.caption("No readings in this time range")
             continue
         r = row.iloc[0]
-        state = "⚠️ out of range" if r["out_of_range"] else "✅ in range"
+        s = status.set_index("device_id").loc[d["device_id"]]
+        link = "🟢 online" if s["online"] else f"🔴 offline ({s['silent_min']:g} min silent)"
+        state = link + " · " + ("⚠️ out of range" if r["out_of_range"] else "✅ in range")
         st.metric(
             "Latest temperature",
             f"{r['temperature_c']:.1f} °C",

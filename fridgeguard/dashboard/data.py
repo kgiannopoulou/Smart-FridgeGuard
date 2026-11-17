@@ -91,6 +91,37 @@ def data_bounds(store: EventStore) -> tuple[datetime, datetime] | None:
     return pd.Timestamp(lo).to_pydatetime(), pd.Timestamp(hi).to_pydatetime()
 
 
+def heartbeat_timeout(config_dir: Path | None = None) -> timedelta:
+    """How long a fridge may be silent before it counts as offline: the DET-005 setting
+    (expected interval x missed intervals), so the dashboard and the rule agree."""
+    rules = load_yaml("detection.yaml", config_dir)["rules"]
+    params = next(
+        (r.get("params") or {} for r in rules.values() if r.get("type") == "missing_heartbeat"),
+        {},
+    )
+    return timedelta(
+        seconds=params.get("expected_interval_s", 60) * params.get("missed_intervals", 3)
+    )
+
+
+def device_status(store: EventStore, now: datetime, timeout: timedelta) -> pd.DataFrame:
+    """Online / offline per registered fridge: offline when its latest reading is older
+    than ``timeout`` at ``now`` (the newest record in the database for simulated data)."""
+    rows = store.conn.execute(
+        """SELECT d.device_id, d.name, MAX(t.ts_device) AS last_seen
+           FROM devices d
+           LEFT JOIN telemetry t ON t.device_id = d.device_id AND t.ts_device <= ?
+           GROUP BY d.device_id ORDER BY d.device_id""",
+        (iso_utc(now),),
+    ).fetchall()
+    df = pd.DataFrame([dict(r) for r in rows], columns=["device_id", "name", "last_seen"])
+    df["last_seen"] = pd.to_datetime(df["last_seen"], utc=True, format="ISO8601")
+    silent = pd.Timestamp(now) - df["last_seen"]
+    df["online"] = df["last_seen"].notna() & (silent <= timeout)
+    df["silent_min"] = (silent.dt.total_seconds() / 60).round(1)
+    return df
+
+
 # ---- devices and temperature ---------------------------------------------------------------
 def devices(store: EventStore) -> pd.DataFrame:
     rows = [dict(r) for r in store.conn.execute("SELECT * FROM devices ORDER BY device_id")]
