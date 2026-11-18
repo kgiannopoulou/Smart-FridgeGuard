@@ -32,6 +32,7 @@ SOC dashboard supports alert triage and incident investigation.
 | | 12. Build the incident investigation workflow | [`fridgeguard/investigation/`](fridgeguard/investigation/), [`config/investigation.yaml`](config/investigation.yaml), [report template](templates/incident-report.md), [example report](docs/examples/INV-000001.md) ([PDF](docs/examples/INV-000001.pdf)), [docs/investigation.md](docs/investigation.md) | Done |
 | | 13. Implement notifications | [`fridgeguard/notifications/`](fridgeguard/notifications/) (console, email, Telegram), [`config/notifications.yaml`](config/notifications.yaml), [example email](docs/examples/notification-ALR-000025.eml), [docs/notifications.md](docs/notifications.md) | Done |
 | 4 – Testing, documentation and presentation | 14. Test the complete system | [test_results.md](test_results.md), test plan [`scenarios/`](scenarios/), [`tests/test_system.py`](tests/test_system.py), [`fridgeguard/evaluation/`](fridgeguard/evaluation/) | Done |
+| | 15. Create the hardware implementation guide | [hardware-guide.md](hardware-guide.md) (ESP32/DS18B20 prototype → small store → enterprise chain; MQTT/Modbus, segmentation, calibration, safe integration) | Done |
 
 ## Quick start
 
