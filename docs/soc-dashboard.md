@@ -4,7 +4,7 @@
 **Step:** 11 – Build the SOC dashboard
 **Status:** Done (2026-11-16, overview metrics aligned with the spec 2026-11-17)
 **Related:** [alert-management.md](alert-management.md) · [correlation.md](correlation.md) ·
-[investigation.md](investigation.md) · [requirements.md](../requirements.md) FR-8
+[investigation.md](investigation.md) · [requirements.md](requirements.md) FR-8
 
 ---
 
@@ -12,13 +12,13 @@ A Streamlit + Plotly dashboard for the analyst on shift. It reads the event data
 answers four questions: *Is the fleet healthy? Is anyone attacking it? What needs my
 attention first? What exactly happened?*
 
-![Overview](images/dashboard-overview.png)
+![Overview](../screenshots/dashboard-overview.png)
 
 ## 1. Quick start
 
 ```powershell
 python -m fridgeguard simulate --duration 7d --faults-per-day 0.5 --show none
-streamlit run dashboard/app.py
+streamlit run app.py
 ```
 
 - Database: `data/fridgeguard.db`, or set `$env:FRIDGEGUARD_DB` to another file.
@@ -59,17 +59,17 @@ data.
   audited actions (alert status/severity, incident review, investigation steps) open it
   for writing, for that one action.
 - **No auto-discovered pages.** Pages live in `dashboard/views/` and are registered with
-  `st.navigation` in [`dashboard/app.py`](../dashboard/app.py). A folder called `pages/`
+  `st.navigation` in [`app.py`](../app.py). A folder called `pages/`
   would make Streamlit add every file a second time.
 
 ## 4. Screenshots
 
 | | |
 |---|---|
-| ![Temperature monitoring](images/dashboard-temperature.png) | ![Security monitoring](images/dashboard-security.png) |
-| ![Alert management](images/dashboard-alerts.png) | ![Incident investigation](images/dashboard-incidents.png) |
+| ![Temperature monitoring](../screenshots/dashboard-temperature.png) | ![Security monitoring](../screenshots/dashboard-security.png) |
+| ![Alert management](../screenshots/dashboard-alerts.png) | ![Incident investigation](../screenshots/dashboard-incidents.png) |
 
-![Alert investigation](images/dashboard-investigation.png)
+![Alert investigation](../screenshots/dashboard-investigation.png)
 
 Screenshots come from the seed-42 week (`simulate --duration 7d --faults-per-day 0.5`).
 The alert investigation uses the same week started on 9 Nov, so that the analyst's
@@ -79,7 +79,7 @@ actions come after the events they review.
 
 | File | Role |
 |------|------|
-| [`dashboard/app.py`](../dashboard/app.py) | entry point, page registration (`st.navigation`) |
+| [`app.py`](../app.py) | entry point, page registration (`st.navigation`) |
 | `dashboard/views/*.py` | one file per page |
 | [`fridgeguard/dashboard/data.py`](../fridgeguard/dashboard/data.py) | pure data functions (DataFrames, no Streamlit), unit-tested: telemetry, excursions, device comparison, device status, security events, suspicious IPs, unusual access, alerts, incidents |
 | [`fridgeguard/dashboard/ui.py`](../fridgeguard/dashboard/ui.py) | page header + sidebar, cached loaders, labels, audited writes |

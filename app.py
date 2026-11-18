@@ -1,14 +1,16 @@
 """Smart-FridgeGuard SOC dashboard (Phase 3, Step 11).
 
-Run with:  streamlit run dashboard/app.py
+Run with:  streamlit run app.py
 Database:  data/fridgeguard.db, or set FRIDGEGUARD_DB to another file.
+Pages:     dashboard/views/ (one file per page); data layer in fridgeguard/dashboard/.
 """
 
 from pathlib import Path
 
 import streamlit as st
 
-PAGES = Path(__file__).parent / "views"  # not "pages/": that name triggers auto-discovery
+# not "pages/": that folder name would trigger Streamlit's page auto-discovery
+PAGES = Path(__file__).parent / "dashboard" / "views"
 
 st.set_page_config(
     page_title="Smart-FridgeGuard SOC",

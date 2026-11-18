@@ -85,7 +85,7 @@ view shows the latest.
 | Set by | When | Example |
 |--------|------|---------|
 | `ingest` | When the event is stored (Step 7) | `suspicious`: privileged account active outside the maintenance window |
-| `DET-00x` | Detection rule matched (Step 8, [detection-engine.md](detection-engine.md)) | `malicious`: DET-001 unauthorized setpoint change that was applied |
+| `DET-00x` | Detection rule matched (Step 8, [detection-rules.md](detection-rules.md)) | `malicious`: DET-001 unauthorized setpoint change that was applied |
 | analyst name | Triage in the dashboard (later step) | `normal`: confirmed emergency repair |
 
 Checks at ingest are based only on facts the device reported. They are deliberately simple

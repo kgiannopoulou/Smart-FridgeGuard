@@ -15,7 +15,7 @@
 | Git / GitHub | Version control, CI | Git 2.47, GitHub Actions | `.gitignore`, `.github/workflows/ci.yml` |
 | pandas | Event and data analysis | 3.1 | `pyproject.toml` |
 | SQLite | Database | 3.50 (Python standard library `sqlite3`) | nothing to install |
-| Streamlit | Dashboard | 1.67 | `dashboard/app.py` |
+| Streamlit | Dashboard | 1.67 | `app.py` |
 | Plotly | Charts and visualisation | 7.1 | `pyproject.toml` |
 | pytest | Testing | 9.2 | `pyproject.toml` → `[tool.pytest.ini_options]` |
 
@@ -46,6 +46,7 @@ python -m venv .venv
 # 3. Install the project (editable) with development tools
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
+# (or: pip install -r requirements.txt, then run the scripts from the repository root)
 
 # 4. Create your local secrets file (never committed)
 copy .env.example .env               # cp .env.example .env on Linux / macOS
@@ -86,7 +87,7 @@ those features (append-only events, JSON payloads).
 | Lint | `ruff check .` |
 | Format | `ruff format .` |
 | Environment check | `python -m fridgeguard check-env` |
-| Start the dashboard | `streamlit run dashboard/app.py` → http://localhost:8501 |
+| Start the dashboard | `streamlit run app.py` → http://localhost:8501 |
 
 ## 4. VS Code
 
@@ -103,30 +104,26 @@ If VS Code does not pick up the interpreter: `Ctrl+Shift+P` → *Python: Select 
 
 ## 5. Project folders
 
-Matches the planned layout in [architecture.md §8](architecture.md#8-planned-repository-layout).
+Summary of the full layout in [architecture.md §8](architecture.md#8-repository-layout).
 
 ```
 Smart-FridgeGuard/
 ├── .github/workflows/ci.yml   # CI: lint, env check, tests on Python 3.12 and 3.13
 ├── .vscode/                   # editor settings, extensions, debug configs
-├── config/                    # devices.yaml, detection.yaml, users.yaml (Step 5+)
-├── scenarios/                 # baseline and attack scenarios (Step 5+)
-├── fridgeguard/               # main Python package
-│   ├── __main__.py            # CLI: python -m fridgeguard
-│   ├── envcheck.py            # development environment check
-│   ├── simulator/             # 1 · refrigeration simulation
-│   ├── generator/             # 2 · event generator
-│   ├── detection/rules/       # 3 · detection and correlation engine
-│   ├── storage/               # 4 · SQLite event storage
-│   └── investigation/         # 6 · alerts and incident investigation
-├── dashboard/                 # 5 · Streamlit SOC dashboard
-│   ├── app.py
-│   └── pages/
+├── app.py                     # Streamlit SOC dashboard entry point
+├── simulator.py … notifications.py   # root entry points for the CLI commands
+├── config/                    # *.yaml: devices, users, detection, correlation, ...
+├── scenarios/                 # system test plan TC-01..TC-10
+├── fridgeguard/               # main Python package (CLI: python -m fridgeguard)
+├── dashboard/views/           # one file per dashboard page
 ├── templates/                 # report templates
 ├── tests/                     # pytest test suite
 ├── data/                      # SQLite database (git-ignored)
-├── reports/                   # generated incident reports (git-ignored)
-├── docs/                      # architecture, setup guide
+├── reports/                   # generated reports (git-ignored)
+├── logs/                      # operational log (git-ignored)
+├── docs/                      # all documentation
+├── screenshots/               # dashboard screenshots
+├── requirements.txt           # pip install -r requirements.txt
 ├── .env.example               # template for local secrets
 └── pyproject.toml             # dependencies and tool configuration
 ```
@@ -144,5 +141,5 @@ Smart-FridgeGuard/
 |---------|-----|
 | `Activate.ps1 cannot be loaded because running scripts is disabled` | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | `ModuleNotFoundError: fridgeguard` | Activate `.venv` and run `pip install -e ".[dev]"` again. |
-| Streamlit port 8501 in use | `streamlit run dashboard/app.py --server.port 8502` |
+| Streamlit port 8501 in use | `streamlit run app.py --server.port 8502` |
 | VS Code Testing panel is empty | Select the `.venv` interpreter, then *Testing → Refresh*. |

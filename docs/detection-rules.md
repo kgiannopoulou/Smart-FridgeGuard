@@ -1,18 +1,46 @@
-# Smart-FridgeGuard — Detection Engine
+# Smart-FridgeGuard — Detection Rules
 
 **Phase:** 2 – Cybersecurity detection engine
-**Step:** 8 – Develop the detection engine
-**Status:** Done (2026-11-14)
-**Related:** [requirements.md](../requirements.md) FR-5/FR-6 · [threat-model.md](../threat-model.md) ·
-[event-database.md](event-database.md) · [alert-management.md](alert-management.md)
+**Steps:** 8 – Develop the detection engine (rules) · catalog and coverage updated in Step 16
+**Status:** Done
+**Related:** [requirements.md](requirements.md) FR-5/FR-6 · [threat-model.md](threat-model.md) ·
+[event-database.md](event-database.md) · [alert-management.md](alert-management.md) ·
+[correlation.md](correlation.md) · [incident-response.md](incident-response.md)
 
-> **Updated in Step 10:** the severities below are *base* severities. The final severity
-> (INFO…CRITICAL) is set by the prioritizer, and DET-001/DET-006 moved from Critical to
-> High (Critical is now reserved for a change followed by a temperature excursion). DET-007
-> (informational maintenance record) was added. Alert statuses are now `new`,
-> `under_investigation`, `confirmed`, `false_positive` and `resolved`. See
-> [alert-management.md](alert-management.md). The week results in section 8 are the
-> Step 8 run.
+## Rule catalog at a glance
+
+Three layers turn raw events into something an analyst acts on:
+
+| Layer | Identifiers | What it does | Configured in |
+|-------|-------------|--------------|---------------|
+| Detection rules | DET-001 … DET-007 | One rule per suspicious behaviour, evaluated on every event in time order | [`config/detection.yaml`](../config/detection.yaml) |
+| Prioritization | INFO … CRITICAL | Final severity from the base severity plus context (applied? how far out of range? critical device? change followed by excursion?) | [`config/prioritization.yaml`](../config/prioritization.yaml) |
+| Correlation | COR-001 … COR-004, COR-000 | Links alerts and events into incidents and matches ordered attack patterns | [`config/correlation.yaml`](../config/correlation.yaml) |
+
+| ID | Name | Trigger (default thresholds) | Base severity | Threat ([threat-model.md](threat-model.md)) | Playbook |
+|----|------|------------------------------|---------------|--------|----------|
+| DET-001 | Unauthorized setpoint change | Setpoint change by a role without permission, or authorization missing | High | T-2, T-4 | [PB-2](incident-response.md#pb-2-unauthorized-configuration-change-det-001--det-006) |
+| DET-002 | Multiple failed logins | ≥ 5 failures from one source IP in 5 min | High | T-3 | [PB-1](incident-response.md#pb-1-brute-force-and-account-takeover-det-002-cor-001-cor-003) |
+| DET-003 | Temperature outside limits | Outside the device's range for ≥ 15 min | High (graded LOW…CRITICAL) | T-4, T-6 | [PB-3](incident-response.md#pb-3-temperature-excursion-det-003-cor-004) |
+| DET-004 | Access outside maintenance hours | Technician/admin login or change outside Mon–Fri 06:00–09:00 | Medium | T-2 | [PB-4](incident-response.md#pb-4-off-hours-or-suspicious-access-det-004-cor-002) |
+| DET-005 | Missing device heartbeat | No reading for 3 × 60 s | High | T-5 | [PB-5](incident-response.md#pb-5-device-offline-det-005) |
+| DET-006 | Unauthorized configuration change | Same as DET-001 for alarm limits, defrost interval, firmware | High | T-2, T-4 | [PB-2](incident-response.md#pb-2-unauthorized-configuration-change-det-001--det-006) |
+| DET-007 | Planned maintenance activity | Permitted, applied change inside the maintenance window | Info (audit trail) | — | none (benign) |
+| COR-001 | Brute force → takeover → tampering | DET-002 → login from same IP → change in that session → optional effect | Critical | T-3 → T-2 → T-4 | [PB-1](incident-response.md#pb-1-brute-force-and-account-takeover-det-002-cor-001-cor-003) |
+| COR-002 | Suspicious login → change | Suspicious login → change in that session (≤ 10 min) | High | T-2 | [PB-4](incident-response.md#pb-4-off-hours-or-suspicious-access-det-004-cor-002) |
+| COR-003 | Brute force → successful login | DET-002 → login from same IP (≤ 30 min) | High | T-3 | [PB-1](incident-response.md#pb-1-brute-force-and-account-takeover-det-002-cor-001-cor-003) |
+| COR-004 | Change → temperature excursion | Applied change → DET-003 on same device (≤ 2 h) | High | T-4 | [PB-3](incident-response.md#pb-3-temperature-excursion-det-003-cor-004) |
+
+Measured performance (10 controlled test cases × 20 seeds): 200 / 200 runs passed, no missed
+detections, no false positives. See [test-results.md](test-results.md).
+
+> **History:** the severities in section 2 are *base* severities. Since Step 10 the final
+> severity (INFO…CRITICAL) is set by the prioritizer, and DET-001/DET-006 moved from
+> Critical to High (Critical is reserved for a change followed by a temperature excursion
+> or a COR-001 incident). DET-007 (informational maintenance record) was added in Step 10.
+> Alert statuses are `new`, `under_investigation`, `confirmed`, `false_positive` and
+> `resolved` ([alert-management.md](alert-management.md)). The week results in section 8
+> are the Step 8 run.
 
 ---
 
@@ -261,17 +289,17 @@ The tests check this on every run: every alert's evidence belongs to an injected
 
 ## 9. Coverage of the requirements
 
-| Requirement rule | Status after Step 8 |
-|------------------|---------------------|
+| Requirement rule | Status (Step 16) |
+|------------------|------------------|
 | DR-1 brute force | **DET-002** |
 | DR-2 login outside normal hours | **DET-004** (stricter: the maintenance window, for privileged roles) |
-| DR-3 login from unknown source IP | not yet |
+| DR-3 login from unknown source IP | not yet (source IPs are recorded and shown on the dashboard's suspicious-IP view; no rule) |
 | DR-4 unauthorised configuration change | **DET-001, DET-006** |
 | DR-5 dangerous setpoint (> 8 °C) | partly: DET-001 when unauthorised; an *authorised* dangerous setpoint is not yet detected |
 | DR-6 temperature out of safe range | **DET-003** |
-| DR-7 sensor tampering / spoofing | not yet |
+| DR-7 sensor tampering / spoofing | not yet (planned: controller vs. independent sensor cross-check, [hardware-guide.md §9](hardware-guide.md#9-independent-temperature-verification)) |
 | DR-8 device silence | **DET-005** |
-| DR-9 correlated attack | not yet |
+| DR-9 correlated attack | **COR-001 … COR-004** (Step 9, [correlation.md](correlation.md)) |
 | DR-10 alarm disabled or widened | partly: DET-006 when unauthorised; an *authorised* widening is not yet detected |
 | DR-11 detection configuration changed | not yet |
 

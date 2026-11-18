@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- evaluate (Step 14) ----
     ev = sub.add_parser(
         "evaluate",
-        help="run the system test plan (scenarios/TC-*.yaml) and write test_results.md",
+        help="run the system test plan (scenarios/TC-*.yaml) and write docs/test-results.md",
         description="Run every controlled scenario through the complete system with several "
         "random seeds and measure detection accuracy, false positives, missed detections, "
         "time to detect and alert generation reliability.",
@@ -112,7 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--first-seed", type=int, default=1)
     ev.add_argument("--case", action="append", help="only this test case (repeatable)")
     ev.add_argument(
-        "--out", default=None, help="Markdown output (default test_results.md; '-' = print only)"
+        "--out",
+        default=None,
+        help="Markdown output (default docs/test-results.md; '-' = print only)",
     )
     ev.add_argument(
         "--hash-iterations", type=int, default=None, help="PBKDF2 iterations (default: config)"
@@ -1157,11 +1159,42 @@ def format_telemetry_table(rows: list[dict]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    import time
+
     from fridgeguard.config import load_dotenv
+    from fridgeguard.logs import setup_logging
 
     load_dotenv()  # secrets for notifications (never overrides the real environment)
     parser = build_parser()
     args = parser.parse_args(argv)
+    log = setup_logging()
+    name = " ".join(
+        str(v) for v in (args.command, *(getattr(args, a, None) for a in _SUBCOMMANDS)) if v
+    )
+    started = time.monotonic()
+    try:
+        code = _dispatch(args, parser)
+    except BaseException as exc:
+        if isinstance(exc, SystemExit | KeyboardInterrupt):
+            log.info("command=%r interrupted (%s)", name or "help", type(exc).__name__)
+        else:
+            log.exception("command=%r crashed", name or "help")
+        raise
+    log.info("command=%r exit=%s duration=%.2fs", name or "help", code, time.monotonic() - started)
+    return code
+
+
+# argparse ``dest`` names of the second-level commands, used for the operational log
+_SUBCOMMANDS = (
+    "events_command",
+    "alerts_command",
+    "incidents_command",
+    "investigate_command",
+    "notify_command",
+)
+
+
+def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "check-env":
         from fridgeguard.envcheck import run_checks
 

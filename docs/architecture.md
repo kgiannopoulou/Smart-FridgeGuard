@@ -3,7 +3,7 @@
 **Phase:** 1 – Planning, architecture and simulation
 **Step:** 3 – Design the system architecture
 **Status:** Draft v1.0 (2026-11-14)
-**Related:** [requirements.md](../requirements.md) · [threat-model.md](../threat-model.md)
+**Related:** [requirements.md](requirements.md) · [threat-model.md](threat-model.md)
 
 ---
 
@@ -133,13 +133,13 @@ carries the label `scenario` (ground truth), which the detection engine never re
 | | |
 |---|---|
 | **Responsibility** | Turn the event stream into classified events and security alerts. |
-| **Implementation** | `fridgeguard/detection/detector.py` (engine) and one module per rule type in `fridgeguard/detection/rules/`. Details: [detection-engine.md](detection-engine.md). |
+| **Implementation** | `fridgeguard/detection/detector.py` (engine) and one module per rule type in `fridgeguard/detection/rules/`. Details: [detection-rules.md](detection-rules.md). |
 | **Input** | Stored events in time order: live, right after each event is stored, or as a batch over the whole database. |
 | **Output** | Alerts with linked evidence, and status verdicts on security events, written through the event store. |
 | **Requirements** | FR-5, FR-6, NFR-3, NFR-4 |
 
 > **Implemented in Step 8** as rules DET-001…DET-006, configured in `config/detection.yaml`
-> (mapping to DR-x in [detection-engine.md §9](detection-engine.md#9-coverage-of-the-requirements)).
+> (mapping to DR-x in [detection-rules.md §9](detection-rules.md#9-coverage-of-the-requirements)).
 > Steps 1–3 below are done by the event store (Step 7), and classification uses the
 > append-only `event_status_history` table. Correlation (DR-9), configuration integrity (DR-11)
 > and the severity increase for the medical fridge are still planned.
@@ -222,7 +222,7 @@ erDiagram
 | | |
 |---|---|
 | **Responsibility** | Show the analyst what is happening, now and historically. |
-| **Implementation** | **Implemented in Step 11** ([soc-dashboard.md](soc-dashboard.md)): `dashboard/app.py` registers the pages in `dashboard/views/` with `st.navigation` (not `pages/`, which Streamlit would auto-discover a second time). Data functions are in `fridgeguard/dashboard/data.py`, without Streamlit, and are unit-tested. |
+| **Implementation** | **Implemented in Step 11** ([soc-dashboard.md](soc-dashboard.md)): `app.py` registers the pages in `dashboard/views/` with `st.navigation` (not `pages/`, which Streamlit would auto-discover a second time). Data functions are in `fridgeguard/dashboard/data.py`, without Streamlit, and are unit-tested. |
 | **Data access** | Read-only connection; queries cached with `st.cache_data`, keyed on the database file's modification time so new data shows on refresh. Audited actions open the database for writing for that one action. |
 | **Requirements** | FR-8, NFR-3 |
 
@@ -317,7 +317,7 @@ sequenceDiagram
 | Investigation → Files | `report.py`: one block model rendered to Markdown and to PDF (fpdf2) | Markdown, PDF | — |
 
 The generator, simulator and detection engine run in one process (`fridgeguard run`).
-The dashboard runs as a second process (`streamlit run dashboard/app.py`).
+The dashboard runs as a second process (`streamlit run app.py`).
 SQLite is the only shared state between the two.
 
 ## 5. Common event schema
@@ -491,11 +491,15 @@ records the action in `config_history`.
 | `config/devices.yaml` | Fleet definition: devices, locations, setpoints, safe ranges, allowed IPs. |
 | `config/detection.yaml` | Rule thresholds, windows, severities, working hours, de-dup window. |
 | `config/users.yaml` | Simulated users and roles (user, technician, admin). No real passwords. |
-| `scenarios/*.yaml` | Attack and baseline scenarios. |
-| `.env` | Secrets (dashboard analyst password hash, optional ThingsBoard tokens). Git-ignored. |
+| `config/prioritization.yaml` | Severity classification INFO…CRITICAL from rule and context (Step 10). |
+| `config/correlation.yaml` | Pivots, linking windows, attack patterns COR-001…004, confidence (Step 9). |
+| `config/investigation.yaml` | Investigation context windows, escalation teams, playbooks per rule (Step 12). |
+| `config/notifications.yaml` | Notification channels, thresholds, cooldown and rate limits (Step 13). |
+| `scenarios/*.yaml` | System test plan TC-01…TC-10 (Step 14). |
+| `.env` | Secrets (dashboard analyst password hash, SMTP/Telegram credentials, optional ThingsBoard tokens). Git-ignored. |
 
-The implemented rules are in [`config/detection.yaml`](../config/detection.yaml) (DET-001…DET-006,
-see [detection-engine.md](detection-engine.md)). The original design sketch below, written in
+The implemented rules are in [`config/detection.yaml`](../config/detection.yaml) (DET-001…DET-007,
+see [detection-rules.md](detection-rules.md)). The original design sketch below, written in
 terms of the DR-x requirements, is kept for the rules that are still planned:
 
 ```yaml
@@ -522,44 +526,53 @@ This covers threat T-7 (detection thresholds quietly raised). `devices.yaml` (al
 and `users.yaml` (roles, maintenance window) are included because they also change what
 the rules detect.
 
-## 8. Planned repository layout
+## 8. Repository layout
+
+Final layout (Step 16). The root scripts are thin entry points; the implementation lives in
+the `fridgeguard/` package so it can be imported, tested and installed.
 
 ```
 Smart-FridgeGuard/
-├── README.md
-├── requirements.md
-├── threat-model.md
+├── app.py                     # Streamlit SOC dashboard entry point (pages in dashboard/views/)
+├── simulator.py               # = python -m fridgeguard simulate
+├── detector.py                # = python -m fridgeguard detect | alerts
+├── correlation.py             # = python -m fridgeguard correlate | incidents | investigate
+├── database.py                # = python -m fridgeguard events
+├── notifications.py           # = python -m fridgeguard notify
+│
+├── fridgeguard/               # implementation package (CLI: python -m fridgeguard)
+│   ├── simulator/             # thermal model, fleet, device faults
+│   ├── generator/             # users, PBKDF2 auth, RBAC, activity and anomalies
+│   ├── simulation.py, sinks.py
+│   ├── storage/               # schema.sql, normalize.py, store.py (EventStore)
+│   ├── detection/             # detector.py, rules/, prioritizer.py, correlator.py
+│   ├── investigation/         # case.py, workflow.py, report.py (Markdown + PDF)
+│   ├── notifications/         # notifier.py, channels.py (console, email, Telegram)
+│   ├── evaluation/            # system test harness (scenario.py, runner.py, report.py)
+│   ├── dashboard/             # dashboard data layer (no Streamlit)
+│   └── logs.py                # operational log -> logs/fridgeguard.log
+├── dashboard/views/           # one file per dashboard page (not pages/: auto-discovery)
+├── config/                    # devices, users, detection, prioritization, correlation,
+│                              # investigation, notifications (*.yaml)
+├── scenarios/                 # system test plan TC-01..TC-10
+├── templates/                 # blank incident-report template
+│
+├── data/                      # SQLite database and JSONL event log (git-ignored)
+├── tests/                     # pytest suite (unit, CLI, dashboard, system tests)
+├── reports/                   # generated reports and email outbox (git-ignored)
+├── logs/                      # operational log (git-ignored)
+│
 ├── docs/
-│   ├── architecture.md          ← this document
-│   └── architecture.svg
-├── config/
-│   ├── devices.yaml
-│   ├── detection.yaml
-│   └── users.yaml
-├── scenarios/
-│   └── *.yaml
-├── fridgeguard/
-│   ├── __main__.py              # CLI: check-env, simulate (later: run, report, verify)
-│   ├── models.py                # Event, Alert, Severity dataclasses
-│   ├── simulator/
-│   ├── generator/
-│   ├── detection/
-│   │   └── rules/
-│   ├── storage/
-│   │   ├── schema.sql
-│   │   └── repository.py
-│   ├── dashboard/               # data layer for the dashboard (no Streamlit)
-│   └── investigation/           # case.py, workflow.py, report.py
-├── dashboard/
-│   ├── app.py
-│   └── views/                   # one file per page (not pages/: auto-discovery)
-├── templates/
-│   └── incident-report.md       # blank SOC report template
-├── tests/
-├── data/                        # SQLite file (git-ignored)
-├── reports/                     # generated reports (git-ignored)
-├── pyproject.toml
-└── .env.example
+│   ├── requirements.md, architecture.md (+ .svg), threat-model.md
+│   ├── detection-rules.md, alert-management.md, correlation.md
+│   ├── incident-response.md, investigation.md, notifications.md
+│   ├── hardware-guide.md, test-results.md, interview-presentation.md
+│   ├── simulation.md, event-database.md, soc-dashboard.md, development-setup.md
+│   └── examples/              # example incident report (MD/PDF), example email
+├── screenshots/               # dashboard screenshots
+├── requirements.txt, pyproject.toml
+├── README.md
+└── .gitignore, .env.example, .github/workflows/ci.yml
 ```
 
 ## 9. Technology stack
@@ -579,7 +592,7 @@ Smart-FridgeGuard/
 
 ## 10. Security design
 
-How the architecture applies the controls from [threat-model.md](../threat-model.md) §10:
+How the architecture applies the controls from [threat-model.md](threat-model.md) §10:
 
 | Control | Architecture decision |
 |---------|-----------------------|
@@ -597,7 +610,7 @@ How the architecture applies the controls from [threat-model.md](../threat-model
 
 ## 11. Relationship to ThingsBoard Edge
 
-ThingsBoard Edge was chosen in [requirements.md](../requirements.md) as the IoT foundation.
+ThingsBoard Edge was chosen in [requirements.md](requirements.md) as the IoT foundation.
 In Phase 1 the lab runs **without** it so the detection logic can be developed and tested
 in pure Python. The architecture keeps a clean seam for it:
 

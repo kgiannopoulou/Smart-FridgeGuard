@@ -119,7 +119,7 @@ window are recorded (`within_maintenance_window: false`) and marked `suspicious`
 (Step 7, docs/event-database.md §4), but no rule raises an *alert* for them yet.
 
 **Implementation (Step 8).** The detection engine implements these requirements as
-configurable rules DET-001…DET-006 (`config/detection.yaml`, docs/detection-engine.md):
+configurable rules DET-001…DET-006 (`config/detection.yaml`, docs/detection-rules.md):
 
 | Implemented rule | Severity | Requirements covered |
 |------------------|----------|----------------------|

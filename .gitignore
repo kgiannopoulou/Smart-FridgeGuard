@@ -21,6 +21,8 @@ data/*
 !data/.gitkeep
 reports/*
 !reports/.gitkeep
+logs/*
+!logs/.gitkeep
 
 # Streamlit local secrets
 .streamlit/secrets.toml

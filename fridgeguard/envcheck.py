@@ -27,7 +27,9 @@ FOLDERS = [
     "tests",
     "data",
     "reports",
+    "logs",
     "docs",
+    "screenshots",
 ]
 
 

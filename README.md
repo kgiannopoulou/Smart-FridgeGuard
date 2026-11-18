@@ -1,74 +1,110 @@
 # Smart-FridgeGuard
 
 [![CI](https://github.com/kgiannopoulou/Smart-FridgeGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/kgiannopoulou/Smart-FridgeGuard/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)
+![Tests](https://img.shields.io/badge/system%20test-200%2F200%20passed-brightgreen)
 
-Security monitoring for a fleet of smart refrigerators, built on **ThingsBoard Edge**.
-The system simulates refrigerators and user activity, detects suspicious behaviour,
-raises security alerts, stores events and produces incident investigation reports.
+**Security monitoring for supermarket refrigerators.** Smart-FridgeGuard simulates a fleet of
+connected fridges and the people who use them, detects attacks such as brute force,
+unauthorized setpoint changes and tampering, correlates them into incidents, and gives a
+SOC analyst a dashboard, a step-by-step investigation workflow and evidence-backed
+incident reports. It is designed to plug into ThingsBoard Edge / MQTT, and a
+[hardware guide](docs/hardware-guide.md) explains how a supermarket could move it to real sensors.
+
+![SOC dashboard overview](screenshots/dashboard-overview.png)
+
+## Why
+
+A smart fridge in a store is operational technology. If someone changes a vaccine fridge's
+setpoint, the result is spoiled medicine or a food-safety incident. Refrigeration alarms
+tell you the temperature went up; they do not tell you **who** changed what, from where, and
+whether it was allowed. Smart-FridgeGuard answers those questions.
+
+## Highlights
+
+| | |
+|---|---|
+| **Threat-driven** | Requirements with traceability, STRIDE threat model, MITRE ATT&CK for ICS mapping, 20 defensive controls |
+| **Realistic simulation** | Thermal model per fridge (thermostat, door openings, sensor noise), users with PBKDF2 passwords, role-based access control, maintenance window, injected attacks and faults |
+| **Detection engineering** | 7 configurable rules (DET-001…007), context-based severity INFO…CRITICAL, 4 correlation patterns including a full kill chain (COR-001) |
+| **Tamper-evident evidence** | Append-only SQLite tables enforced by triggers, SHA-256 per event, hashes re-verified in every report |
+| **SOC workflow** | Streamlit dashboard, alert triage with audited status changes, 8-step L1 investigation, Markdown/PDF incident reports, incident-response playbooks |
+| **Low-noise notifications** | Console, email and Telegram with cooldown, escalation and rate limits: a 300-attempt brute force gives 3 notifications |
+| **Measured** | 10 controlled scenarios × 20 seeds: 200 / 200 runs passed, 0 false positives, 0 missed detections; ~280 automated tests in CI |
 
 ## Architecture
 
 ![Architecture](docs/architecture.svg)
 
-Three simulated refrigerators feed a Python event generator; a detection and correlation
-engine classifies events and raises alerts, everything is stored in SQLite, and a Streamlit
-SOC dashboard supports alert triage and incident investigation.
-
-## Project status
-
-| Phase | Step | Deliverable | Status |
-|-------|------|-------------|--------|
-| 1 – Planning, architecture and simulation | 1. Define the project requirements | [requirements.md](requirements.md) | Done |
-| | 2. Research the threat and build a threat model | [threat-model.md](threat-model.md) | Done |
-| | 3. Design the system architecture | [docs/architecture.md](docs/architecture.md), [diagram](docs/architecture.svg) | Done |
-| | 4. Prepare the development environment | [docs/development-setup.md](docs/development-setup.md), venv, project folders, CI | Done |
-| | 5. Build the refrigerator simulation engine | `fridgeguard/simulator/`, [docs/simulation.md](docs/simulation.md) | Done |
-| | 6. Build the user and activity simulator | `fridgeguard/generator/`, [docs/simulation.md](docs/simulation.md) | Done |
-| 2 – Cybersecurity detection engine | 7. Build the event logging system | `fridgeguard/storage/`, [docs/event-database.md](docs/event-database.md) | Done |
-| | 8. Develop the detection engine | [`fridgeguard/detection/detector.py`](fridgeguard/detection/detector.py), rules in `fridgeguard/detection/rules/`, [`config/detection.yaml`](config/detection.yaml), [docs/detection-engine.md](docs/detection-engine.md) | Done |
-| | 9. Develop event correlation | [`fridgeguard/detection/correlator.py`](fridgeguard/detection/correlator.py), [`config/correlation.yaml`](config/correlation.yaml), patterns COR-001..004, [docs/correlation.md](docs/correlation.md) | Done |
-| | 10. Implement alert prioritization | [`fridgeguard/detection/prioritizer.py`](fridgeguard/detection/prioritizer.py), [`config/prioritization.yaml`](config/prioritization.yaml), alert workflow, [docs/alert-management.md](docs/alert-management.md) | Done |
-| 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`dashboard/`](dashboard/app.py) (Streamlit), data layer in [`fridgeguard/dashboard/`](fridgeguard/dashboard/), [docs/soc-dashboard.md](docs/soc-dashboard.md) | Done |
-| | 12. Build the incident investigation workflow | [`fridgeguard/investigation/`](fridgeguard/investigation/), [`config/investigation.yaml`](config/investigation.yaml), [report template](templates/incident-report.md), [example report](docs/examples/INV-000001.md) ([PDF](docs/examples/INV-000001.pdf)), [docs/investigation.md](docs/investigation.md) | Done |
-| | 13. Implement notifications | [`fridgeguard/notifications/`](fridgeguard/notifications/) (console, email, Telegram), [`config/notifications.yaml`](config/notifications.yaml), [example email](docs/examples/notification-ALR-000025.eml), [docs/notifications.md](docs/notifications.md) | Done |
-| 4 – Testing, documentation and presentation | 14. Test the complete system | [test_results.md](test_results.md), test plan [`scenarios/`](scenarios/), [`tests/test_system.py`](tests/test_system.py), [`fridgeguard/evaluation/`](fridgeguard/evaluation/) | Done |
-| | 15. Create the hardware implementation guide | [hardware-guide.md](hardware-guide.md) (ESP32/DS18B20 prototype → small store → enterprise chain; MQTT/Modbus, segmentation, calibration, safe integration) | Done |
+Three simulated refrigerators feed a Python event generator; the detection engine applies
+the rules, the prioritizer sets the severity and the correlator builds incidents. Everything
+is stored in SQLite; the Streamlit SOC dashboard and the notifier read from it. Details:
+[docs/architecture.md](docs/architecture.md).
 
 ## Quick start
 
 ```powershell
+git clone https://github.com/kgiannopoulou/Smart-FridgeGuard.git
+cd Smart-FridgeGuard
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-python -m fridgeguard check-env
-pytest
-streamlit run dashboard/app.py
+.venv\Scripts\Activate.ps1               # source .venv/bin/activate on Linux / macOS
+pip install -r requirements.txt          # or: pip install -e ".[dev]" for the `fridgeguard` command
+
+python simulator.py --duration 7d --faults-per-day 0.5 --show none   # a week of data, detection live
+python correlation.py                     # link alerts into incidents
+python detector.py alerts queue           # open alerts, most severe first
+streamlit run app.py                      # SOC dashboard on http://localhost:8501
+pytest                                    # test suite
 ```
 
-Full instructions: [docs/development-setup.md](docs/development-setup.md).
+Every root script is a shortcut for a `python -m fridgeguard` command, e.g.
+`python detector.py` = `python -m fridgeguard detect`. Full setup:
+[docs/development-setup.md](docs/development-setup.md).
 
-## Run the simulation
+## Repository structure
+
+```
+Smart-FridgeGuard/
+├── app.py               # Streamlit SOC dashboard (pages in dashboard/views/)
+├── simulator.py         # refrigerator + user activity simulation
+├── detector.py          # detection rules and alert management
+├── correlation.py       # incidents and the investigation workflow
+├── database.py          # event database queries, import, integrity check
+├── notifications.py     # console / email / Telegram notifications
+│
+├── fridgeguard/         # implementation package (simulator, generator, storage,
+│                        #   detection, investigation, notifications, evaluation)
+├── config/              # all thresholds, users, devices and playbooks in YAML
+├── scenarios/           # system test plan TC-01…TC-10
+├── data/                # SQLite database and JSONL event log (generated)
+├── tests/               # pytest suite
+├── reports/             # generated reports and email outbox (generated)
+├── logs/                # operational log logs/fridgeguard.log (generated)
+│
+├── docs/                # requirements, architecture, threat model, detection rules,
+│                        #   incident response, hardware guide, test results, ...
+├── screenshots/         # dashboard screenshots
+├── requirements.txt
+├── README.md
+└── .gitignore
+```
+
+## How it works
+
+### 1. Simulate fridges and users
 
 ```powershell
-python -m fridgeguard simulate --realtime --speed 60        # live, until Ctrl+C
-python -m fridgeguard simulate --duration 3d --show activity # 3 days of data, fast
+python simulator.py --realtime --speed 60            # live, until Ctrl+C
+python simulator.py --duration 3d --show activity    # 3 days of data, fast
 ```
 
-Three refrigerators with different operating ranges follow a thermal model (thermostat,
-door openings, sensor noise). Fictional users (`store_manager`, `maintenance_tech`,
-`system_admin`, `unknown_user`) log in, change settings and occasionally behave
-suspiciously. Role-based access control and a maintenance window decide what is allowed.
-All events go to the console, `data/events.jsonl` and the SQLite event database
-`data/fridgeguard.db`. See [docs/simulation.md](docs/simulation.md).
+Three refrigerators (dairy fridge, freezer, pharmacy vaccine fridge) follow a thermal
+model. Fictional users (`store_manager`, `maintenance_tech`, `system_admin`,
+`unknown_user`) log in, change settings and occasionally behave suspiciously; RBAC and a
+maintenance window decide what is allowed. Events go to the console, `data/events.jsonl`
+and `data/fridgeguard.db`. → [docs/simulation.md](docs/simulation.md)
 
-## Detect suspicious behaviour
-
-```powershell
-python -m fridgeguard simulate --duration 7d --faults-per-day 0.5 --show none   # live detection
-python -m fridgeguard alerts list
-python -m fridgeguard alerts show ALR-000001
-python -m fridgeguard detect                                   # re-run rules over stored events
-```
+### 2. Detect suspicious behaviour
 
 | Rule | Detects | Base severity |
 |------|---------|---------------|
@@ -80,20 +116,15 @@ python -m fridgeguard detect                                   # re-run rules ov
 | DET-006 | Unauthorized user configuration change | High |
 | DET-007 | Planned maintenance activity (audit trail) | Info |
 
-Thresholds, windows and severities are set in `config/detection.yaml`, not in code. Over a
-simulated week the rules caught every injected unauthorized change, off-hours session,
-compressor failure and outage, with no false positives. See
-[docs/detection-engine.md](docs/detection-engine.md).
-
-## Prioritize and manage alerts
-
 ```powershell
-python -m fridgeguard alerts queue                                  # open alerts, most severe first
-python -m fridgeguard alerts status ALR-000008 under_investigation   # assigns it to you
-python -m fridgeguard alerts status ALR-000008 false_positive --note "Planned call-out, confirmed by phone"
-python -m fridgeguard alerts severity ALR-000002 CRITICAL --note "Same IP seen at another store"
-python -m fridgeguard alerts stats
+python detector.py                       # re-run all rules over the stored events
+python detector.py alerts show ALR-000001
 ```
+
+Thresholds, windows and severities live in `config/detection.yaml`, not in code.
+→ [docs/detection-rules.md](docs/detection-rules.md)
+
+### 3. Prioritize and triage alerts
 
 | Severity | Example |
 |----------|---------|
@@ -103,107 +134,74 @@ python -m fridgeguard alerts stats
 | Low | Minor abnormal behaviour requiring observation (small temperature deviation) |
 | Info | Normal maintenance activity |
 
-The prioritizer classifies each alert from its rule's base severity and the context (was
-the change applied? how far did the temperature go? critical device? did the temperature
-react to an unauthorized change?), stores the reason, and re-classifies as the situation
-develops. Alerts move through **new → under investigation → confirmed / false positive /
-resolved**. Every step is assigned, needs a note where it matters, and is kept in an
-append-only history. See [docs/alert-management.md](docs/alert-management.md).
-
-## Correlate alerts into incidents
-
 ```powershell
-python -m fridgeguard correlate                      # also runs after detect / simulate
-python -m fridgeguard incidents list
-python -m fridgeguard incidents show INC-20261117-001
-python -m fridgeguard incidents review INC-20261117-001 closed --verdict true_positive --note "Owner did not log in"
+python detector.py alerts status ALR-000008 under_investigation
+python detector.py alerts status ALR-000008 false_positive --note "Planned call-out, confirmed by phone"
 ```
 
-The correlator links alerts with the events around them (same session, source IP, user or
-device, close in time), follows the pivots an analyst would make (logins after failed
-attempts, the rest of the session, changes before a temperature excursion, did the sensor
-react to a change?) and matches ordered attack patterns: COR-001 brute force -> takeover ->
-tampering (CRITICAL), COR-002 suspicious login -> change, COR-003 brute force -> login,
-COR-004 change -> excursion. Each incident has a confidence score with its reasons, a
-timeline, questions to verify and a recommended response. Incidents start "unverified";
-analyst reviews are append-only. See [docs/correlation.md](docs/correlation.md).
+Alerts move through **new → under investigation → confirmed / false positive / resolved**,
+with an append-only history. → [docs/alert-management.md](docs/alert-management.md)
 
-## Investigate an alert (L1 SOC workflow)
+### 4. Correlate alerts into incidents
 
 ```powershell
-python -m fridgeguard investigate start ALR-000025           # assigns the alert to you
-python -m fridgeguard investigate show INV-000001            # gathered evidence + suggested decisions
-python -m fridgeguard investigate record INV-000001 authorization --decision unauthorized --note "External source guessing credentials"
-python -m fridgeguard investigate record INV-000001 documentation --decision true_positive --note "..."
-python -m fridgeguard investigate report INV-000001 --format pdf    # or --format md
+python correlation.py incidents list
+python correlation.py incidents show INC-20261117-001
 ```
 
-For each alert the analyst works through eight steps: review the alert, identify the
-affected refrigerator, examine the related events, investigate the user and source IP,
-decide whether the activity was authorized, assess the potential impact, escalate to the
-right team (L2 SOC, maintenance engineering, store management, IT/network) and document
-the investigation. The system gathers the evidence for each step and suggests the three
-judgement calls with the reasons behind them. The analyst decides. Documenting the
-investigation moves the alert to confirmed / resolved / false positive.
+The correlator follows the pivots an analyst would make (same session, IP, user, device)
+and matches ordered attack patterns: COR-001 brute force → takeover → tampering
+(CRITICAL), COR-002 suspicious login → change, COR-003 brute force → login, COR-004
+change → excursion. Each incident has a confidence score, a timeline and a recommended
+response. → [docs/correlation.md](docs/correlation.md)
 
-The result is a downloadable **incident report** in Markdown or PDF that follows the SOC
-template (incident ID, detection time, affected device, severity; then initial alert,
-investigation performed, evidence collected, event timeline, findings, potential impact,
-recommended response, escalation decision, final status). Every evidence record is
-re-verified against its SHA-256 hash when the report is built. Example:
-[INV-000001.md](docs/examples/INV-000001.md) · [INV-000001.pdf](docs/examples/INV-000001.pdf).
-See [docs/investigation.md](docs/investigation.md).
-
-## Notifications
+### 5. Investigate and report
 
 ```powershell
-python -m fridgeguard notify channels          # configured channels (secrets shown as "(set)")
-python -m fridgeguard notify test email        # test one channel
-python -m fridgeguard notify run               # notify stored alerts not handled yet, retry failures
-python -m fridgeguard notify list --alert ALR-000025
+python correlation.py investigate start ALR-000025
+python correlation.py investigate record INV-000001 authorization --decision unauthorized --note "External source guessing credentials"
+python correlation.py investigate report INV-000001 --format pdf
 ```
 
-Important alerts are sent while detection runs: **console** (MEDIUM and above), **email**
-(HIGH and above; `.eml` files in `reports/outbox/` by default, or a real SMTP server) and
-optional **Telegram** (bot API). Secrets come only from the environment or `.env`.
+Eight steps: review the alert, identify the fridge, examine related events, investigate
+user and IP, decide authorization, assess impact, escalate, document. The system gathers the
+evidence and suggests the judgement calls with reasons; the analyst decides. Example report:
+[INV-000001.md](docs/examples/INV-000001.md) · [PDF](docs/examples/INV-000001.pdf).
+→ [docs/investigation.md](docs/investigation.md) · playbooks in
+[docs/incident-response.md](docs/incident-response.md)
 
-Notifications are **deduplicated** per incident (or rule + subject): identical hits
-within a one-hour cooldown are held back and logged, a higher severity is sent at once,
-continuing activity gets one hourly reminder with the held-back count, and a per-channel
-rate limit stops storms (CRITICAL always goes through). A brute force of 300 attempts over
-2.5 hours gives 296 rule hits and 3 notifications. Every decision is stored, so re-runs never
-notify twice. See [docs/notifications.md](docs/notifications.md).
+![Alert investigation](screenshots/dashboard-investigation.png)
 
-## SOC dashboard
+### 6. Notify the right people
 
 ```powershell
-streamlit run dashboard/app.py          # reads data/fridgeguard.db (or $env:FRIDGEGUARD_DB)
+python notifications.py channels        # configured channels (secrets shown as "(set)")
+python notifications.py run             # notify stored alerts not handled yet
 ```
+
+Console (MEDIUM+), email (HIGH+; `.eml` files in `reports/outbox/` or a real SMTP server) and
+optional Telegram, deduplicated per incident with cooldown, escalation and rate limiting.
+→ [docs/notifications.md](docs/notifications.md)
+
+### 7. SOC dashboard
 
 | Page | Shows |
 |------|-------|
-| Overview | total fridges, online / offline, active alerts, critical incidents; fleet cards, open alerts by severity, open incidents, latest alerts |
-| Temperature monitoring | history per fridge with expected range, abnormal readings and excursions, device comparison |
+| Overview | fridges online / offline, active alerts, critical incidents, latest alerts |
+| Temperature monitoring | history per fridge with expected range, excursions, device comparison |
 | Security monitoring | failed and successful logins, configuration changes, suspicious IPs, unusual access times |
-| Alert management | severity, timestamps, affected fridge, associated user, status; triage and severity override (audited) |
-| Alert investigation | the L1 workflow for one alert step by step, suggested decisions, event timeline, Markdown and PDF report download |
-| Incident investigation | event timeline, related alerts, evidence collected, analyst findings, recommended response, Markdown report |
+| Alert management | triage queue, status changes and severity overrides (audited) |
+| Alert investigation | the 8-step L1 workflow, suggested decisions, timeline, report download |
+| Incident investigation | correlated incidents, related alerts, evidence, recommended response |
 
-See [docs/soc-dashboard.md](docs/soc-dashboard.md).
+→ [docs/soc-dashboard.md](docs/soc-dashboard.md) · more in [`screenshots/`](screenshots/)
 
-![SOC dashboard overview](docs/images/dashboard-overview.png)
-![Alert investigation](docs/images/dashboard-investigation.png)
-
-## Test the complete system
+### 8. Test the complete system
 
 ```powershell
-python -m fridgeguard evaluate --seeds 20     # runs the test plan, writes test_results.md
-pytest tests/test_system.py                   # the same cases as automated tests
+python -m fridgeguard evaluate --seeds 20     # runs the test plan, writes docs/test-results.md
+python database.py verify                     # re-check every event's SHA-256 hash
 ```
-
-Ten controlled test cases ([`scenarios/`](scenarios/)) run through the real simulator and
-the production pipeline (validation, storage, detection, prioritization, notifications,
-correlation), each with 20 random seeds:
 
 | Test | Expected result | Result |
 |------|-----------------|--------|
@@ -212,42 +210,75 @@ correlation), each with 20 random seeds:
 | Five failed logins | Brute-force alert | DET-002 HIGH, 20 / 20 |
 | Temperature rises gradually | Temperature warning | DET-003, 20 / 20 |
 | Device stops sending readings | Offline alert | DET-005 HIGH, 20 / 20 |
-| Authorized technician changes settings | Authorized activity recorded | DET-007 INFO only, events normal, 20 / 20 |
+| Authorized technician changes settings | Authorized activity recorded | DET-007 INFO only, 20 / 20 |
 | Suspicious login followed by configuration change | Correlated incident | COR-002, 20 / 20 |
 | + full kill chain, and two boundary cases just under the thresholds | Critical incident / no alert | 20 / 20 each |
 
-200 / 200 runs passed: no missed detection, no false positive, identical results for the
-same seed, re-runs idempotent, every HIGH+ alert notified. Time to detect ranges from
-immediate (unauthorized change, suspicious login) and 80 s (brute force) to 2 min (offline)
-and 20-43 min (temperature: the cabinet must warm up, then stay out of range 15 min).
-The tests also found two defects, which are fixed. Details, limitations and how to
-reproduce: [test_results.md](test_results.md).
+Time to detect: immediate (unauthorized change), ~80 s (brute force), ~2 min (offline),
+20–43 min (temperature). The tests found two defects, both fixed.
+→ [docs/test-results.md](docs/test-results.md)
 
-## Query the event database
+## From simulation to a real supermarket
 
-```powershell
-python -m fridgeguard events stats
-python -m fridgeguard events list --status suspicious
-python -m fridgeguard events list --type SETPOINT_CHANGE --device FRIDGE-001
-python -m fridgeguard events verify                          # re-check SHA-256 hashes
-```
-
-Temperature telemetry and security audit events (logins, setpoint and configuration
-changes with user, source IP, previous/new value and status) are stored in separate
-append-only tables. See [docs/event-database.md](docs/event-database.md).
+[docs/hardware-guide.md](docs/hardware-guide.md) describes three implementation levels —
+an ESP32 + DS18B20 prototype, a single store with commercial sensors and an industrial IoT
+gateway, and an enterprise chain with segmented OT networks and a central SIEM — plus MQTT
+and Modbus integration, secure communication, segmentation, calibration and independent
+temperature verification. Smart-FridgeGuard is an **independent, read-only** monitor: a real
+deployment needs approval from refrigeration engineers and food-safety specialists, and it
+must not replace certified refrigeration alarms or safety controls.
 
 ## Documentation
 
-- [Requirements](requirements.md): functional and non-functional requirements, detection rules, traceability
-- [Threat model](threat-model.md): assets, entry points, threat actors, STRIDE analysis, MITRE ATT&CK for ICS mapping, risk rating, defensive controls
-- [Architecture](docs/architecture.md): components, data flow, event schema, SQLite schema, detection engine design, configuration, tech stack, security design
-- [Development setup](docs/development-setup.md): tools, virtual environment, VS Code, project folders, everyday commands
-- [Simulation](docs/simulation.md): refrigerator thermal model, reading format, users and roles, authentication, authorization, activity events
-- [Detection engine](docs/detection-engine.md): rules DET-001…DET-007, configuration, alert grouping and evidence, results against ground truth
-- [Alert management](docs/alert-management.md): severity classification INFO…CRITICAL, prioritization steps, alert statuses and workflow, triage queue
-- [Event correlation](docs/correlation.md): pivots, linking, attack patterns COR-001…004, confidence score, incident reviews
-- [SOC dashboard](docs/soc-dashboard.md): pages, online/offline logic, design rules, code map
-- [System test results](test_results.md): test plan, detection accuracy, false positives, missed detections, time to detect, reliability, defects found
-- [Notifications](docs/notifications.md): console, email and Telegram channels, deduplication (cooldown, escalation, reminders, rate limit), secrets, reliability
-- [Incident investigation](docs/investigation.md): L1 workflow, suggested decisions, escalation teams, incident report (Markdown/PDF), evidence integrity
-- [Event database](docs/event-database.md): telemetry vs. security audit events, event fields and types, status, integrity, CLI and SQL access
+| Document | Contents |
+|----------|----------|
+| [Requirements](docs/requirements.md) | Functional and non-functional requirements, detection requirements DR-1…11, traceability |
+| [Architecture](docs/architecture.md) | Components, data flow, event schema, database schema, configuration, repository layout, design decisions |
+| [Threat model](docs/threat-model.md) | Assets, entry points, actors, STRIDE, MITRE ATT&CK for ICS, risk rating, controls |
+| [Detection rules](docs/detection-rules.md) | Rule catalog, DET-001…007 logic and configuration, coverage of the requirements |
+| [Incident response](docs/incident-response.md) | Roles, severity targets, escalation, playbooks PB-1…6, evidence handling |
+| [Hardware guide](docs/hardware-guide.md) | Hardware components, implementation levels 1–3, protocols, segmentation, calibration, safe integration |
+| [Test results](docs/test-results.md) | Test plan, detection accuracy, false positives, time to detect, defects found |
+| [Alert management](docs/alert-management.md) | Severity classification, prioritization, alert statuses, triage queue |
+| [Event correlation](docs/correlation.md) | Pivots, linking, COR-001…004, confidence score, incident reviews |
+| [Incident investigation](docs/investigation.md) | L1 workflow, suggested decisions, incident report, evidence integrity |
+| [Notifications](docs/notifications.md) | Channels, deduplication, secrets, reliability |
+| [SOC dashboard](docs/soc-dashboard.md) | Pages, online/offline logic, code map |
+| [Simulation](docs/simulation.md) | Thermal model, users and roles, authentication, activity events |
+| [Event database](docs/event-database.md) | Telemetry vs. security events, fields, status, integrity, CLI and SQL access |
+| [Development setup](docs/development-setup.md) | Tools, virtual environment, VS Code, everyday commands |
+| [Interview presentation](docs/interview-presentation.md) | Pitch, 10-minute talk, demo script, design decisions, Q&A |
+
+## Project status
+
+| Phase | Step | Deliverable | Status |
+|-------|------|-------------|--------|
+| 1 – Planning, architecture and simulation | 1. Define the project requirements | [docs/requirements.md](docs/requirements.md) | Done |
+| | 2. Research the threat and build a threat model | [docs/threat-model.md](docs/threat-model.md) | Done |
+| | 3. Design the system architecture | [docs/architecture.md](docs/architecture.md), [diagram](docs/architecture.svg) | Done |
+| | 4. Prepare the development environment | [docs/development-setup.md](docs/development-setup.md), venv, project folders, CI | Done |
+| | 5. Build the refrigerator simulation engine | [`fridgeguard/simulator/`](fridgeguard/simulator/), [docs/simulation.md](docs/simulation.md) | Done |
+| | 6. Build the user and activity simulator | [`fridgeguard/generator/`](fridgeguard/generator/), [docs/simulation.md](docs/simulation.md) | Done |
+| 2 – Cybersecurity detection engine | 7. Build the event logging system | [`fridgeguard/storage/`](fridgeguard/storage/), [docs/event-database.md](docs/event-database.md) | Done |
+| | 8. Develop the detection engine | [`fridgeguard/detection/`](fridgeguard/detection/), [`config/detection.yaml`](config/detection.yaml), [docs/detection-rules.md](docs/detection-rules.md) | Done |
+| | 9. Develop event correlation | [`correlator.py`](fridgeguard/detection/correlator.py), [`config/correlation.yaml`](config/correlation.yaml), [docs/correlation.md](docs/correlation.md) | Done |
+| | 10. Implement alert prioritization | [`prioritizer.py`](fridgeguard/detection/prioritizer.py), [`config/prioritization.yaml`](config/prioritization.yaml), [docs/alert-management.md](docs/alert-management.md) | Done |
+| 3 – SOC dashboard and incident response | 11. Build the SOC dashboard | [`app.py`](app.py), [`dashboard/views/`](dashboard/views/), [docs/soc-dashboard.md](docs/soc-dashboard.md) | Done |
+| | 12. Build the incident investigation workflow | [`fridgeguard/investigation/`](fridgeguard/investigation/), [report template](templates/incident-report.md), [example report](docs/examples/INV-000001.md), [docs/investigation.md](docs/investigation.md) | Done |
+| | 13. Implement notifications | [`fridgeguard/notifications/`](fridgeguard/notifications/), [`config/notifications.yaml`](config/notifications.yaml), [docs/notifications.md](docs/notifications.md) | Done |
+| 4 – Testing, documentation and presentation | 14. Test the complete system | [docs/test-results.md](docs/test-results.md), [`scenarios/`](scenarios/), [`tests/test_system.py`](tests/test_system.py) | Done |
+| | 15. Create the hardware implementation guide | [docs/hardware-guide.md](docs/hardware-guide.md) | Done |
+| | 16. Prepare the final portfolio and interview presentation | Repository structure, root entry points, [docs/incident-response.md](docs/incident-response.md), [docs/interview-presentation.md](docs/interview-presentation.md) | Done |
+
+## Limitations
+
+- All data is simulated; the MQTT / ThingsBoard Edge adapter and real hardware are designed
+  ([architecture §11](docs/architecture.md#11-relationship-to-thingsboard-edge),
+  [hardware guide](docs/hardware-guide.md)) but not implemented or tested.
+- Not yet implemented: DR-3 (unknown source IP), DR-7 (sensor tampering cross-check),
+  DR-11 (detection configuration changed), and detection of *authorised* dangerous changes
+  (DR-5/DR-10) — see [coverage](docs/detection-rules.md#9-coverage-of-the-requirements).
+- SMTP and Telegram were tested against a local test server and mocks, not real services.
+- Single site, single process, SQLite; a supermarket chain needs the Level 3 design.
+
+All users, IP addresses and events in this repository are fictional.

@@ -14,7 +14,7 @@ from fridgeguard.storage import EventStore
 from tests.test_correlation import ATTACKER, Story
 from tests.test_detection import MON_0630, TUE_0300
 
-APP = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
 PAGES = ["overview", "temperature", "security", "alerts", "investigation", "incidents"]
 
 
@@ -123,7 +123,7 @@ def test_incident_detail_and_report(store):
 def run_page(page: str) -> AppTest:
     at = AppTest.from_file(APP, default_timeout=60).run()
     if page != "overview":
-        at.switch_page(f"views/{page}.py").run()
+        at.switch_page(f"dashboard/views/{page}.py").run()
     return at
 
 

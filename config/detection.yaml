@@ -6,7 +6,7 @@
 #
 # Common fields
 #   name          shown in alerts
-#   type          rule type (see docs/detection-engine.md for the list)
+#   type          rule type (see docs/detection-rules.md for the list)
 #   enabled       false switches the rule off
 #   severity      INFO | LOW | MEDIUM | HIGH | CRITICAL  (base severity; the final
 #                 classification is done by config/prioritization.yaml)

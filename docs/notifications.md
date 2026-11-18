@@ -4,7 +4,7 @@
 **Step:** 13 – Implement notifications
 **Status:** Done (2026-11-17)
 **Related:** [alert-management.md](alert-management.md) · [correlation.md](correlation.md) ·
-[investigation.md](investigation.md) · [requirements.md](../requirements.md) FR-6
+[investigation.md](investigation.md) · [requirements.md](requirements.md) FR-6
 
 ---
 
@@ -125,7 +125,7 @@ the notifier decides:
 - **Audit.** `notify list` and the **Notifications** tab of each alert on the Alert
   management page show every decision with its reason.
 
-![Notifications tab](images/dashboard-notifications.png)
+![Notifications tab](../screenshots/dashboard-notifications.png)
 
 ## 5. Storage
 

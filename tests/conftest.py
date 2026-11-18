@@ -49,3 +49,5 @@ def passwords(directory_and_passwords):
 def _email_outbox_in_tmp(tmp_path_factory, monkeypatch):
     """CLI tests run detection with notifications on: keep their .eml files out of the repo."""
     monkeypatch.setenv("FRIDGEGUARD_EMAIL_OUTBOX", str(tmp_path_factory.mktemp("outbox")))
+    # ...and the operational log (logs/fridgeguard.log) as well
+    monkeypatch.setenv("FRIDGEGUARD_LOG_DIR", str(tmp_path_factory.mktemp("logs")))

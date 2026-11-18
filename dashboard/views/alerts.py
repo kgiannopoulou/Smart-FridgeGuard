@@ -140,7 +140,7 @@ st.caption(
 if alert["incident_id"]:
     st.caption(f"Part of incident **{alert['incident_id']}**: see Incident investigation.")
 st.page_link(
-    "views/investigation.py",
+    "dashboard/views/investigation.py",
     label="Investigate this alert (L1 workflow and incident report)",
     icon="🕵️",
     query_params={"alert": alert_id},

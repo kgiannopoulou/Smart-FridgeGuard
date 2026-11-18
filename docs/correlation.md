@@ -3,8 +3,8 @@
 **Phase:** 2 – Cybersecurity detection engine
 **Step:** 9 – Develop event correlation
 **Status:** Done (2026-11-16)
-**Related:** [detection-engine.md](detection-engine.md) · [alert-management.md](alert-management.md) ·
-[investigation.md](investigation.md) · [requirements.md](../requirements.md) DR-9
+**Related:** [detection-rules.md](detection-rules.md) · [alert-management.md](alert-management.md) ·
+[investigation.md](investigation.md) · [requirements.md](requirements.md) DR-9
 
 ---
 

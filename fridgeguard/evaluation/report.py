@@ -1,4 +1,4 @@
-"""Aggregate system-test runs into metrics and ``test_results.md`` (Phase 4, Step 14)."""
+"""Aggregate system-test runs into metrics and ``docs/test-results.md`` (Phase 4, Step 14)."""
 
 from __future__ import annotations
 
@@ -165,7 +165,7 @@ def to_markdown(ev: Evaluation) -> str:
         f"**Generated:** {ev.started:%Y-%m-%d %H:%M} UTC by `python -m fridgeguard evaluate "
         f"--seeds {n}` (commit `{_git_commit()}`, Python {platform.python_version()}, "
         f"{platform.system()})  ",
-        "**Related:** [test plan scenarios](scenarios/) · [automated tests](tests/test_system.py)"
+        "**Related:** [test plan scenarios](../scenarios/) · [automated tests](../tests/test_system.py)"
         " · [requirements.md](requirements.md) · [threat-model.md](threat-model.md)",
         "",
         "---",
@@ -192,7 +192,7 @@ def to_markdown(ev: Evaluation) -> str:
         "",
         "## 2. Test plan",
         "",
-        "Each case is a YAML file in [`scenarios/`](scenarios/). The real simulator runs "
+        "Each case is a YAML file in [`scenarios/`](../scenarios/). The real simulator runs "
         "(thermal model, door openings, sensor noise, users with PBKDF2 passwords and RBAC); "
         "the scripted actions go through the same interfaces as normal activity "
         "(`AuthService.login / change_config / logout`, the fridges' fault controls). Every "
@@ -311,7 +311,7 @@ def to_markdown(ev: Evaluation) -> str:
         "",
         "| # | Found in | Defect | Fix |",
         "|---|----------|--------|-----|",
-        "| 1 | TC-04 (1 of 20 seeds) and TC-08 (3 of 20 seeds) before the fix | A temperature alert created as LOW (deviation still small) was below the HIGH notification threshold. The prioritizer re-graded it to HIGH only at the end of detection, and the notifier only re-checked alerts it had already notified, so the HIGH alert was never notified live. | The detector re-grades open temperature alerts every 5 min of activity time (`reprioritize_every_s` in `config/detection.yaml`) and reports a change through `on_alert`; the notifier also notifies an alert that crosses a channel's threshold for the first time. Regression tests: [`tests/test_system.py`](tests/test_system.py). |",
+        "| 1 | TC-04 (1 of 20 seeds) and TC-08 (3 of 20 seeds) before the fix | A temperature alert created as LOW (deviation still small) was below the HIGH notification threshold. The prioritizer re-graded it to HIGH only at the end of detection, and the notifier only re-checked alerts it had already notified, so the HIGH alert was never notified live. | The detector re-grades open temperature alerts every 5 min of activity time (`reprioritize_every_s` in `config/detection.yaml`) and reports a change through `on_alert`; the notifier also notifies an alert that crosses a channel's threshold for the first time. Regression tests: [`tests/test_system.py`](../tests/test_system.py). |",
         '| 2 | TC-09, TC-10 (every run) | `notify run` and the `detect` command crashed on a database without any alert: the latest alert time defaulted to `"0"`, which is not a timestamp. | Escalation check skipped when there are no alerts. Regression test: `test_notify_run_and_detect_work_on_a_database_without_alerts`. |',
         "",
         "## 7. Limitations",
@@ -337,7 +337,7 @@ def to_markdown(ev: Evaluation) -> str:
         "## 8. Reproduce",
         "",
         "```powershell",
-        f"python -m fridgeguard evaluate --seeds {n}          # all cases, writes test_results.md",
+        f"python -m fridgeguard evaluate --seeds {n}          # all cases, writes docs/test-results.md",
         "python -m fridgeguard evaluate --case TC-03 --seeds 5 --out -   # one case, print only",
         "pytest tests/test_system.py                          # the same cases as automated tests",
         "```",
@@ -350,4 +350,4 @@ def to_markdown(ev: Evaluation) -> str:
 
 
 def default_output() -> str:
-    return str(PROJECT_ROOT / "test_results.md")
+    return str(PROJECT_ROOT / "docs" / "test-results.md")

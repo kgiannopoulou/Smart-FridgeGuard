@@ -4,7 +4,7 @@
 **Step:** 12 – Build the incident investigation workflow
 **Status:** Done (2026-11-17)
 **Related:** [alert-management.md](alert-management.md) · [correlation.md](correlation.md) ·
-[soc-dashboard.md](soc-dashboard.md) · [requirements.md](../requirements.md) FR-9, NFR-5
+[soc-dashboard.md](soc-dashboard.md) · [requirements.md](requirements.md) FR-9, NFR-5
 
 ---
 
@@ -21,7 +21,7 @@ Example report: [examples/INV-000001.md](examples/INV-000001.md) ·
 [PDF](examples/INV-000001.pdf). Blank template:
 [templates/incident-report.md](../templates/incident-report.md).
 
-![Alert investigation](images/dashboard-investigation.png)
+![Alert investigation](../screenshots/dashboard-investigation.png)
 
 ## 1. Quick start
 

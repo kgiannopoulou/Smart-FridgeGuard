@@ -44,5 +44,5 @@ extend-exclude = ["*.md"]
 select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
-# Markdown table rows of test_results.md read better as one line each
+# Markdown table rows of docs/test-results.md read better as one line each
 "fridgeguard/evaluation/report.py" = ["E501"]

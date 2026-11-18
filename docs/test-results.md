@@ -3,7 +3,7 @@
 **Phase:** 4 – Testing, professional documentation and presentation  
 **Step:** 14 – Test the complete system  
 **Generated:** 2026-11-17 08:09 UTC by `python -m fridgeguard evaluate --seeds 20` (commit `9cbb577`, Python 3.14.7, Windows)  
-**Related:** [test plan scenarios](scenarios/) · [automated tests](tests/test_system.py) · [requirements.md](requirements.md) · [threat-model.md](threat-model.md)
+**Related:** [test plan scenarios](../scenarios/) · [automated tests](../tests/test_system.py) · [requirements.md](requirements.md) · [threat-model.md](threat-model.md)
 
 ---
 
@@ -24,7 +24,7 @@ Every test case ran **20 times with different random seeds** (1-20): the seed ch
 
 ## 2. Test plan
 
-Each case is a YAML file in [`scenarios/`](scenarios/). The real simulator runs (thermal model, door openings, sensor noise, users with PBKDF2 passwords and RBAC); the scripted actions go through the same interfaces as normal activity (`AuthService.login / change_config / logout`, the fridges' fault controls). Every event passes through the production pipeline: `EventStore` (validation, SHA-256) → live `Detector` (rules + prioritizer) → `Notifier`, then `Correlator`. Only the scripted actions are abnormal: background anomalies and random faults are off.
+Each case is a YAML file in [`scenarios/`](../scenarios/). The real simulator runs (thermal model, door openings, sensor noise, users with PBKDF2 passwords and RBAC); the scripted actions go through the same interfaces as normal activity (`AuthService.login / change_config / logout`, the fridges' fault controls). Every event passes through the production pipeline: `EventStore` (validation, SHA-256) → live `Detector` (rules + prioritizer) → `Notifier`, then `Correlator`. Only the scripted actions are abnormal: background anomalies and random faults are off.
 
 | ID | Test | Expected result | What the system must produce | Passed |
 |----|------|-----------------|------------------------------|--------|
@@ -222,7 +222,7 @@ Time from the action to the first notification of a HIGH+ alert: 2.0 min (min 0 
 
 | # | Found in | Defect | Fix |
 |---|----------|--------|-----|
-| 1 | TC-04 (1 of 20 seeds) and TC-08 (3 of 20 seeds) before the fix | A temperature alert created as LOW (deviation still small) was below the HIGH notification threshold. The prioritizer re-graded it to HIGH only at the end of detection, and the notifier only re-checked alerts it had already notified, so the HIGH alert was never notified live. | The detector re-grades open temperature alerts every 5 min of activity time (`reprioritize_every_s` in `config/detection.yaml`) and reports a change through `on_alert`; the notifier also notifies an alert that crosses a channel's threshold for the first time. Regression tests: [`tests/test_system.py`](tests/test_system.py). |
+| 1 | TC-04 (1 of 20 seeds) and TC-08 (3 of 20 seeds) before the fix | A temperature alert created as LOW (deviation still small) was below the HIGH notification threshold. The prioritizer re-graded it to HIGH only at the end of detection, and the notifier only re-checked alerts it had already notified, so the HIGH alert was never notified live. | The detector re-grades open temperature alerts every 5 min of activity time (`reprioritize_every_s` in `config/detection.yaml`) and reports a change through `on_alert`; the notifier also notifies an alert that crosses a channel's threshold for the first time. Regression tests: [`tests/test_system.py`](../tests/test_system.py). |
 | 2 | TC-09, TC-10 (every run) | `notify run` and the `detect` command crashed on a database without any alert: the latest alert time defaulted to `"0"`, which is not a timestamp. | Escalation check skipped when there are no alerts. Regression test: `test_notify_run_and_detect_work_on_a_database_without_alerts`. |
 
 ## 7. Limitations
@@ -237,7 +237,7 @@ Time from the action to the first notification of a HIGH+ alert: 2.0 min (min 0 
 ## 8. Reproduce
 
 ```powershell
-python -m fridgeguard evaluate --seeds 20          # all cases, writes test_results.md
+python -m fridgeguard evaluate --seeds 20          # all cases, writes docs/test-results.md
 python -m fridgeguard evaluate --case TC-03 --seeds 5 --out -   # one case, print only
 pytest tests/test_system.py                          # the same cases as automated tests
 ```

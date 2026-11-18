@@ -41,7 +41,7 @@ real, independent refrigeration security-monitoring deployment.
 
 ## 1. From simulation to hardware
 
-In the lab every component is software ([docs/architecture.md](docs/architecture.md)):
+In the lab every component is software ([architecture.md](architecture.md)):
 
 | Lab component (today) | Real-world equivalent |
 |-----------------------|-----------------------|
@@ -155,11 +155,11 @@ directly through `EventStore`. JSONL can be loaded with the existing CLI:
 ```powershell
 python -m fridgeguard events import data/hardware-events.jsonl
 python -m fridgeguard detect
-streamlit run dashboard/app.py
+streamlit run app.py
 ```
 
 > The MQTT bridge (`MqttSink` / subscriber) is a planned extension
-> ([docs/architecture.md §11](docs/architecture.md#11-relationship-to-thingsboard-edge)); it is
+> ([architecture.md §11](architecture.md#11-relationship-to-thingsboard-edge)); it is
 > not implemented in this repository yet.
 
 **What Level 1 proves:** real telemetry, heartbeat loss (unplug the ESP32 → DET-005),
@@ -423,7 +423,7 @@ Independence is the core security value of the hardware design (C-17, T-4, T-6).
 ## 11. Mapping hardware data to the Smart-FridgeGuard event schema
 
 Real data must be converted by the gateway or bridge into the common envelope described in
-[docs/architecture.md §5](docs/architecture.md#5-common-event-schema). Each device in
+[architecture.md §5](architecture.md#5-common-event-schema). Each device in
 `config/devices.yaml` gets its real location, safe range and allowed source IPs.
 
 | Hardware source | Event type | Payload fields filled from |
@@ -531,4 +531,4 @@ Example of a real reading converted by the bridge:
 - Regulation (EC) No 37/2005 — monitoring of temperatures of quick-frozen foodstuffs; EN 12830, EN 13485, EN 13486.
 - Codex Alimentarius / Regulation (EC) No 852/2004 — food hygiene and HACCP principles.
 - Project documents: [requirements.md](requirements.md), [threat-model.md](threat-model.md),
-  [docs/architecture.md](docs/architecture.md), [test_results.md](test_results.md).
+  [architecture.md](architecture.md), [test-results.md](test-results.md).

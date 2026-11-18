@@ -137,7 +137,7 @@ with left:
         showgrid=False, visible=False, range=[0, max(1, counts.max() if len(counts) else 1) * 1.2]
     )
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, theme=None)
-    st.page_link("views/alerts.py", label="Open the alert queue", icon="🚨")
+    st.page_link("dashboard/views/alerts.py", label="Open the alert queue", icon="🚨")
 
 with right:
     st.subheader("Open incidents")
@@ -165,7 +165,7 @@ with right:
                 "title": "Title",
             },
         )
-        st.page_link("views/incidents.py", label="Investigate incidents", icon="🔎")
+        st.page_link("dashboard/views/incidents.py", label="Investigate incidents", icon="🔎")
 
 st.subheader("Latest alerts")
 recent = alerts.sort_values("first_seen", ascending=False).head(8)

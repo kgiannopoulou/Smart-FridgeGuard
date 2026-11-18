@@ -242,7 +242,9 @@ with rel:
                 "assigned_to": "Assigned to",
             },
         )
-        st.page_link("views/alerts.py", label="Triage these alerts in Alert management", icon="🚨")
+        st.page_link(
+            "dashboard/views/alerts.py", label="Triage these alerts in Alert management", icon="🚨"
+        )
 
 # ---- 3. evidence collected ---------------------------------------------------------------
 with evid:

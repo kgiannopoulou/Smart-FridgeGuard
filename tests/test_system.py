@@ -3,7 +3,7 @@
 Every test case of the test plan runs through the real simulator and the production
 pipeline (store -> detection + prioritization -> notifications -> correlation) with
 fixed seeds, so the results are repeatable. ``python -m fridgeguard evaluate`` runs the
-same cases with more seeds and writes test_results.md.
+same cases with more seeds and writes docs/test-results.md.
 """
 
 import pytest

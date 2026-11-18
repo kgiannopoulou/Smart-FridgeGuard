@@ -2,7 +2,7 @@
 
 Each file is one controlled system test case. `python -m fridgeguard evaluate` runs them
 through the real simulator and the full detection pipeline and writes
-[`test_results.md`](../test_results.md); `tests/test_system.py` runs the same cases in pytest.
+[`docs/test-results.md`](../docs/test-results.md); `tests/test_system.py` runs the same cases in pytest.
 
 Times are UTC; the site is Europe/Athens (UTC+2 in November). Maintenance window: Mon-Fri
 06:00-09:00 local (04:00-07:00 UTC). Store open 07:00-22:00 local.
